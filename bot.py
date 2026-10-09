@@ -186,6 +186,15 @@ class MurrayBot(commands.Bot):
                   f"age={labels.get('age')} gender={labels.get('gender')} "
                   f"use={v.get('category')}", flush=True)
 
+    async def get_text_lounge_id(self):
+        char = await self.get_character()
+        if char and char.get("text_channel_id"):
+            try:
+                return int(char["text_channel_id"])
+            except (TypeError, ValueError):
+                return None
+        return None
+
     async def get_hangout_id(self):
         char = await self.get_character()
         if char and char.get("voice_channel_id"):
@@ -298,6 +307,8 @@ class MurrayBot(commands.Bot):
         content = (message.content or "").strip()
         mentioned = self.user in message.mentions
         addressed = content.lower().startswith("murray")
+        lounge_id = await self.get_text_lounge_id()
+        in_lounge = lounge_id is not None and message.channel.id == lounge_id
         # Voice notes: audio attachments get transcribed and answered.
         audio = None
         for att in message.attachments:
@@ -308,12 +319,13 @@ class MurrayBot(commands.Bot):
                                    ".oga", ".webm", ".flac"))):
                 audio = att
                 break
-        if audio is not None and (mentioned or addressed or not content):
+        if audio is not None and (mentioned or addressed or in_lounge
+                                   or not content):
             await self._handle_voice_note(message, audio)
             return
         if not content or content.startswith(("/", "!")):
             return
-        if not (mentioned or addressed):
+        if not (mentioned or addressed or in_lounge):
             return
         now = time.time()
         key = (message.guild.id, message.author.id)
@@ -462,6 +474,24 @@ async def sethangout_cmd(interaction: discord.Interaction,
             else:
                 await interaction.followup.send(
                     "Saved, but I couldn't join it. Check my permissions.")
+            return
+    await interaction.followup.send("Couldn't save that. Try again.")
+
+
+@bot.tree.command(name="setlounge",
+                  description="Pick Murray's text lounge — he answers here.")
+@app_commands.describe(channel="His text channel — no mention needed.")
+async def setlounge_cmd(interaction: discord.Interaction,
+                        channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    char = await bot.get_character()
+    if char and char.get("id"):
+        saved = await characters.save_character(
+            {"text_channel_id": str(channel.id)}, char["id"])
+        if saved:
+            bot._char_cache = None
+            await interaction.followup.send(
+                f"My lounge is {channel.name}. Just type, kid — I'm listening.")
             return
     await interaction.followup.send("Couldn't save that. Try again.")
 

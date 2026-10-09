@@ -61,7 +61,8 @@ async def save_character(data, char_id=None):
     # Only allow known fields.
     allowed = ("name", "avatar_url", "tagline", "greeting", "personality",
                "example_dialogue", "scenario", "tags", "visibility",
-               "is_active", "voice_clip_url", "voice_note", "voice_channel_id")
+               "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
+               "text_channel_id")
     payload = {k: data.get(k) for k in allowed if k in data}
     # If this one is being activated, deactivate the others first.
     try:
