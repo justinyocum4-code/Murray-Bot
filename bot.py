@@ -165,6 +165,30 @@ class MurrayBot(commands.Bot):
                 reply = characters.apply_banned_phrases(reply, char)
             return web.json_response({"ok": True, "reply": reply or ""})
 
+        @_require_auth
+        async def api_lore_list(request):
+            character_id = request.query.get("character_id", "")
+            entries = await characters.list_lorebook(character_id)
+            return web.json_response({"entries": entries})
+
+        @_require_auth
+        async def api_lore_save(request):
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                return web.json_response({"error": "bad json"}, status=400)
+            entry_id = body.get("id")
+            saved = await characters.save_lorebook(body, entry_id)
+            if not saved:
+                return web.json_response({"error": "save failed"}, status=500)
+            return web.json_response({"ok": True, "entry": saved})
+
+        @_require_auth
+        async def api_lore_delete(request):
+            entry_id = request.match_info["entry_id"]
+            ok = await characters.delete_lorebook(entry_id)
+            return web.json_response({"ok": ok})
+
         app.router.add_get("/dashboard/login", login_page)
         app.router.add_post("/dashboard/login", login_post)
         app.router.add_get("/dashboard", dashboard_page)
@@ -172,6 +196,9 @@ class MurrayBot(commands.Bot):
         app.router.add_post("/api/characters", api_save)
         app.router.add_delete("/api/characters/{char_id}", api_delete)
         app.router.add_post("/api/test-chat", api_test_chat)
+        app.router.add_get("/api/lorebook", api_lore_list)
+        app.router.add_post("/api/lorebook", api_lore_save)
+        app.router.add_delete("/api/lorebook/{entry_id}", api_lore_delete)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -287,10 +314,21 @@ class MurrayBot(commands.Bot):
                       characters.MURRAY_SEED))
         display = (char or {}).get("name") or name
         max_tokens = characters.get_max_tokens(char)
+        # Inject any lorebook entries whose keywords match this message.
+        lore = ""
+        if char and char.get("id"):
+            lore = await characters.get_relevant_lore(text, char["id"])
+        if lore:
+            system = system + f"\nRelevant background:\n{lore}"
         reply = await ai_chat(system, f"{display} talking to {name}: {text}",
-                             max_tokens=max_tokens)
+                             max_tokens=max_tokens,
+                             temperature=characters.get_temperature(char),
+                             frequency_penalty=characters.get_repetition_penalty(char))
         if reply and char:
             reply = characters.apply_banned_phrases(reply, char)
+        if not reply:
+            # Never go silent — fall back to an in-character shrug.
+            reply = "Bah, lost my train of thought there. Run that by me again."
         return reply
 
     async def _handle_voice_note(self, message, attachment):
