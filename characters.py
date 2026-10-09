@@ -64,7 +64,7 @@ async def save_character(data, char_id=None):
                "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
                "text_channel_id", "speech_style", "quirks", "never_says",
                "banned_phrases", "banned_topics", "reply_length",
-               "character_memory")
+               "character_memory", "temperature", "repetition_penalty")
     payload = {k: data.get(k) for k in allowed if k in data}
     # If this one is being activated, deactivate the others first.
     try:
@@ -201,6 +201,115 @@ def get_max_tokens(char):
     """Map the reply_length setting to a token budget."""
     length = ((char or {}).get("reply_length") or "medium").lower()
     return {"short": 120, "long": 500}.get(length, 300)
+
+
+def get_temperature(char):
+    """Read the temperature setting, clamped to 0.0-1.5."""
+    try:
+        t = float((char or {}).get("temperature") or 0.7)
+    except (TypeError, ValueError):
+        t = 0.7
+    return max(0.0, min(1.5, t))
+
+
+def get_repetition_penalty(char):
+    """Read the repetition penalty, clamped to 0.0-2.0. Maps to frequency_penalty."""
+    try:
+        p = float((char or {}).get("repetition_penalty") or 0.5)
+    except (TypeError, ValueError):
+        p = 0.5
+    return max(0.0, min(2.0, p))
+
+
+LORE_TABLE = "murray_lorebook"
+
+
+async def list_lorebook(character_id):
+    """All lorebook entries for a character, newest first."""
+    url, _ = _cfg()
+    if not configured() or not character_id:
+        return []
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{url}/rest/v1/{LORE_TABLE}?character_id=eq.{character_id}"
+                "&select=*&order=created_at.desc",
+                headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                if r.status != 200:
+                    return []
+                return await r.json()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def save_lorebook(data, entry_id=None):
+    """Create or update a lorebook entry. Returns the saved row or None."""
+    url, _ = _cfg()
+    if not configured():
+        return None
+    allowed = ("character_id", "keywords", "content", "is_active")
+    payload = {k: data.get(k) for k in allowed if k in data}
+    try:
+        async with aiohttp.ClientSession() as s:
+            if entry_id:
+                async with s.patch(
+                    f"{url}/rest/v1/{LORE_TABLE}?id=eq.{entry_id}",
+                    headers=_headers(), json=payload,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    if r.status not in (200, 204):
+                        return None
+                    rows = await r.json() if r.status == 200 else []
+                    return rows[0] if rows else {"id": entry_id, **payload}
+            else:
+                async with s.post(
+                    f"{url}/rest/v1/{LORE_TABLE}", headers=_headers(),
+                    json=payload, timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    if r.status not in (200, 201):
+                        return None
+                    rows = await r.json()
+                    return rows[0] if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def delete_lorebook(entry_id):
+    url, _ = _cfg()
+    if not configured():
+        return False
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.delete(
+                f"{url}/rest/v1/{LORE_TABLE}?id=eq.{entry_id}",
+                headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                return r.status in (200, 204)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def get_relevant_lore(message, character_id):
+    """Return lorebook contents whose keywords appear in the message."""
+    entries = await list_lorebook(character_id)
+    if not entries or not message:
+        return ""
+    msg = message.lower()
+    hits = []
+    for e in entries:
+        if not e.get("is_active"):
+            continue
+        keywords = [k.strip().lower()
+                    for k in (e.get("keywords") or "").replace("\n", ",").split(",")
+                    if k.strip()]
+        if any(kw in msg for kw in keywords):
+            content = (e.get("content") or "").strip()
+            if content:
+                hits.append(content)
+    return "\n".join(hits)
 
 
 def apply_banned_phrases(text, char):

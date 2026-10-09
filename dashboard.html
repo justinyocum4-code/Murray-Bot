@@ -69,6 +69,12 @@ placeholder="e.g. metal bands, fishing, politics">
 <option value="medium" selected>Medium (1-3 sentences)</option>
 <option value="long">Long (up to 4-5 sentences)</option>
 </select>
+<label for="f-temp">Creativity (temperature) — <span id="f-temp-val">0.7</span></label>
+<input type="range" id="f-temp" min="0" max="1.5" step="0.1" value="0.7" style="width:100%">
+<p class="muted" style="margin:.2em 0">Lower = focused and consistent. Higher = wilder and more random.</p>
+<label for="f-rep">Repetition control — <span id="f-rep-val">0.5</span></label>
+<input type="range" id="f-rep" min="0" max="2" step="0.1" value="0.5" style="width:100%">
+<p class="muted" style="margin:.2em 0">Higher = less repeating the same words and phrases.</p>
 <label for="f-memory">Memory (things the character remembers about people)</label>
 <textarea id="f-memory" style="min-height:4em"
 placeholder="e.g. Justin has a dog named Rex. He works nights."></textarea>
@@ -109,10 +115,31 @@ character right now</label>
 <input type="text" id="f-test" style="width:100%" placeholder="Say something…">
 <button type="button" id="btn-test">Send test message</button>
 
+<h2>Lorebook</h2>
+<p class="muted">Background notes that pop into the character's context only when their keywords come up in conversation. One entry per topic.</p>
+<div id="lore-list"><p class="muted">Save the character first, then manage lorebook entries here.</p></div>
+<h3>Add lorebook entry</h3>
+<label for="f-lore-keys">Keywords (comma separated)</label>
+<input type="text" id="f-lore-keys" style="width:100%" placeholder="e.g. truck, ford, pickup">
+<label for="f-lore-content">Content (what the character should know)</label>
+<textarea id="f-lore-content" style="min-height:4em" placeholder="e.g. Justin drives a 2012 Ford F-150. It's got 180k miles and a noisy transmission."></textarea>
+<input type="hidden" id="f-lore-id">
+<button type="button" id="btn-lore-save">Save lorebook entry</button>
+<button type="button" class="ghost" id="btn-lore-clear">Clear</button>
+
 <script>
 const $=id=>document.getElementById(id);
 const say=m=>{$("status").textContent=m;};
 let chars=[];
+let loreEntries=[];
+
+function setSlider(id,val,def){
+  const el=$(id);
+  el.value=(val===undefined||val===null||val==="")?def:val;
+  $(id+"-val").textContent=el.value;
+}
+$("f-temp").oninput=e=>{$("f-temp-val").textContent=e.target.value;};
+$("f-rep").oninput=e=>{$("f-rep-val").textContent=e.target.value;};
 
 async function load(){
   say("Loading characters…");
@@ -166,6 +193,8 @@ function edit(id){
   $("f-banned").value=c.banned_phrases||"";
   $("f-topics").value=c.banned_topics||"";
   $("f-length").value=c.reply_length||"medium";
+  setSlider("f-temp",c.temperature,0.7);
+  setSlider("f-rep",c.repetition_penalty,0.5);
   $("f-memory").value=c.character_memory||"";
   $("f-dialogue").value=c.example_dialogue||"";
   $("f-scenario").value=c.scenario||"";
@@ -211,6 +240,8 @@ $("form").onsubmit=async e=>{
     banned_phrases:$("f-banned").value.trim(),
     banned_topics:$("f-topics").value.trim(),
     reply_length:$("f-length").value,
+    temperature:parseFloat($("f-temp").value),
+    repetition_penalty:parseFloat($("f-rep").value),
     character_memory:$("f-memory").value.trim(),
     example_dialogue:$("f-dialogue").value.trim(),
     scenario:$("f-scenario").value.trim(),
@@ -261,6 +292,8 @@ $("btn-test").onclick=async ()=>{
     banned_phrases:$("f-banned").value.trim(),
     banned_topics:$("f-topics").value.trim(),
     reply_length:$("f-length").value,
+    temperature:parseFloat($("f-temp").value),
+    repetition_penalty:parseFloat($("f-rep").value),
     character_memory:$("f-memory").value.trim(),
     scenario:$("f-scenario").value.trim(),
     example_dialogue:$("f-dialogue").value.trim()
@@ -277,6 +310,84 @@ $("btn-test").onclick=async ()=>{
 $("f-test").addEventListener("keydown",e=>{
   if(e.key==="Enter"){e.preventDefault();$("btn-test").click();}
 });
+
+async function loadLore(){
+  const cid=$("f-id").value;
+  const box=$("lore-list");
+  if(!cid){box.innerHTML='<p class="muted">Save the character first, then manage lorebook entries here.</p>';return;}
+  try{
+    const r=await fetch("/api/lorebook?character_id="+encodeURIComponent(cid));
+    const d=await r.json();
+    loreEntries=d.entries||[];
+    renderLore();
+  }catch(e){box.innerHTML='<p class="muted">Could not load lorebook.</p>';}
+}
+function renderLore(){
+  const box=$("lore-list");box.innerHTML="";
+  if(!loreEntries.length){box.innerHTML='<p class="muted">No lorebook entries yet.</p>';return;}
+  for(const e of loreEntries){
+    const div=document.createElement("div");
+    div.className="card";
+    const h=document.createElement("b");
+    h.textContent=e.keywords||"(no keywords)";
+    h.style.color="#f5c518";
+    div.appendChild(h);
+    const p=document.createElement("p");
+    p.style.margin=".3em 0";
+    p.textContent=e.content||"";
+    div.appendChild(p);
+    const eb=document.createElement("button");
+    eb.type="button";eb.textContent="Edit";
+    eb.onclick=()=>{
+      $("f-lore-id").value=e.id;
+      $("f-lore-keys").value=e.keywords||"";
+      $("f-lore-content").value=e.content||"";
+      say("Editing lorebook entry");
+    };
+    const db=document.createElement("button");
+    db.type="button";db.textContent="Delete";db.className="ghost";
+    db.onclick=async ()=>{
+      if(!confirm("Delete this lorebook entry?"))return;
+      const r=await fetch("/api/lorebook/"+e.id,{method:"DELETE"});
+      const d=await r.json();
+      say(d.ok?"Deleted.":"Delete failed.");
+      loadLore();
+    };
+    div.appendChild(eb);div.appendChild(db);
+    box.appendChild(div);
+  }
+}
+$("btn-lore-save").onclick=async ()=>{
+  const cid=$("f-id").value;
+  if(!cid){say("Save the character first.");return;}
+  const keys=$("f-lore-keys").value.trim();
+  const content=$("f-lore-content").value.trim();
+  if(!keys||!content){say("Keywords and content are both required.");return;}
+  say("Saving lorebook entry…");
+  const body={character_id:cid,keywords:keys,content:content,is_active:true};
+  const eid=$("f-lore-id").value;
+  if(eid)body.id=eid;
+  try{
+    const r=await fetch("/api/lorebook",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)});
+    const d=await r.json();
+    if(d.ok){
+      say("Lorebook entry saved.");
+      $("f-lore-id").value="";$("f-lore-keys").value="";$("f-lore-content").value="";
+      loadLore();
+    }else say("Save failed.");
+  }catch(e){say("Save failed — check your connection.");}
+};
+$("btn-lore-clear").onclick=()=>{
+  $("f-lore-id").value="";$("f-lore-keys").value="";$("f-lore-content").value="";
+  say("Lorebook form cleared.");
+};
+const _origEdit=edit;
+edit=function(id){
+  _origEdit(id);
+  loadLore();
+};
 load();
 </script>
 </body>

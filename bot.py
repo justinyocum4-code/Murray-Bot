@@ -326,9 +326,6 @@ class MurrayBot(commands.Bot):
                              frequency_penalty=characters.get_repetition_penalty(char))
         if reply and char:
             reply = characters.apply_banned_phrases(reply, char)
-        if not reply:
-            # Never go silent — fall back to an in-character shrug.
-            reply = "Bah, lost my train of thought there. Run that by me again."
         return reply
 
     async def _handle_voice_note(self, message, attachment):
