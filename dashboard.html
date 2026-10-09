@@ -30,6 +30,8 @@ button.ghost{background:#333;color:#f5c518}
 
 <h2>Bots</h2>
 <p class="muted">Each bot is a separate Discord bot — just paste its token. Pick a bot to manage its characters.</p>
+<button type="button" id="btn-test-key">Test AI key</button>
+<p class="muted" id="key-status"></p>
 <div id="bot-list"><p class="muted">Loading…</p></div>
 <label for="f-bot-name">New bot name</label>
 <input type="text" id="f-bot-name" placeholder="e.g. Old Man Murray">
@@ -228,6 +230,15 @@ $("btn-bot-add").onclick=async ()=>{
     if(d.ok){say("Bot added. Restart the Render service for it to connect.");$("f-bot-name").value="";$("f-bot-token").value="";load();}
     else say("Add failed.");
   }catch(e){say("Add failed — check your connection.");}
+};
+$("btn-test-key").onclick=async ()=>{
+  $("key-status").textContent="Testing…";
+  try{
+    const r=await fetch("/api/test-key");
+    const d=await r.json();
+    if(d.ok)$("key-status").textContent="AI key works. Reply: "+(d.reply||"OK");
+    else $("key-status").textContent="AI key FAILED: "+(d.error||("status "+d.status))+" (key starts with "+(d.key_prefix||"?")+", length "+(d.key_length||"?")+")";
+  }catch(e){$("key-status").textContent="Test failed — check your connection.";}
 };
 function render(){
   const box=$("list");box.innerHTML="";

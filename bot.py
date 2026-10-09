@@ -232,6 +232,40 @@ class MurrayBot(commands.Bot):
             ok = await characters.delete_bot(bot_id)
             return web.json_response({"ok": ok})
 
+        @_require_auth
+        async def api_test_key(request):
+            """Test the GROQ_API_KEY and report the exact result."""
+            key = os.environ.get("GROQ_API_KEY", "")
+            if not key:
+                return web.json_response({"ok": False, "error": "GROQ_API_KEY is not set on Render"})
+            result = {"ok": False, "key_prefix": key[:7] + "…", "key_length": len(key)}
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": "openai/gpt-oss-20b",
+                              "messages": [{"role": "user", "content": "Say OK"}],
+                              "max_tokens": 10},
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as r:
+                        result["status"] = r.status
+                        try:
+                            body = await r.json()
+                        except Exception:  # noqa: BLE001
+                            body = (await r.text())[:500]
+                        if r.status == 200:
+                            result["ok"] = True
+                            try:
+                                result["reply"] = body["choices"][0]["message"]["content"][:200]
+                            except Exception:  # noqa: BLE001
+                                result["reply"] = str(body)[:200]
+                        else:
+                            result["error"] = str(body)[:500]
+            except Exception as e:  # noqa: BLE001
+                result["error"] = f"{type(e).__name__}: {e}"
+            return web.json_response(result)
+
         app.router.add_get("/dashboard/login", login_page)
         app.router.add_post("/dashboard/login", login_post)
         app.router.add_get("/dashboard", dashboard_page)
@@ -245,6 +279,7 @@ class MurrayBot(commands.Bot):
         app.router.add_get("/api/bots", api_bot_list)
         app.router.add_post("/api/bots", api_bot_save)
         app.router.add_delete("/api/bots/{bot_id}", api_bot_delete)
+        app.router.add_get("/api/test-key", api_test_key)
 
         global _WEB_STARTED
         if not _WEB_STARTED:
