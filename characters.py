@@ -232,6 +232,8 @@ def build_system_prompt(char):
     """Turn a character row into a system prompt for the AI."""
     name = char.get("name") or "Murray"
     parts = [f"You are {name}."]
+    parts.append("Don't address the other person by name in every reply — "
+                 "only use their name occasionally, when it feels natural.")
     if char.get("tagline"):
         parts.append(char["tagline"])
     if char.get("personality"):

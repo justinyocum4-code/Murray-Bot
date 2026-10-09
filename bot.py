@@ -407,7 +407,7 @@ class MurrayBot(commands.Bot):
             system = system + f"\nRelevant background:\n{lore}"
         # Recent conversation history so he stays on topic.
         history = self._history.get((guild_id, channel_id), [])
-        reply = await ai_chat(system, f"{display} talking to {name}: {text}",
+        reply = await ai_chat(system, text,
                              max_tokens=max_tokens,
                              temperature=characters.get_temperature(char),
                              frequency_penalty=characters.get_repetition_penalty(char),
@@ -421,8 +421,7 @@ class MurrayBot(commands.Bot):
         if guild_id is not None and channel_id is not None:
             key = (guild_id, channel_id)
             hist = self._history.setdefault(key, [])
-            hist.append({"role": "user",
-                         "content": f"{name}: {text[:500]}"})
+            hist.append({"role": "user", "content": text[:500]})
             hist.append({"role": "assistant", "content": reply[:500]})
             self._history[key] = hist[-20:]
         return reply
