@@ -15,6 +15,7 @@ from aiohttp import web
 from ai import ai_chat
 import characters
 import voice as voice_mod
+import listen as listen_mod
 
 SESSIONS = {}  # token -> expiry
 
@@ -53,6 +54,7 @@ class MurrayBot(commands.Bot):
         self._cooldown = {}
         self._char_cache = None
         self._char_cache_at = 0
+        self._listeners = {}  # guild_id -> listen_mod.Listener
 
     async def get_character(self):
         # Cache the active character for 60s so every message isn't a DB hit.
@@ -280,7 +282,23 @@ async def join_cmd(interaction: discord.Interaction):
             await vc.move_to(user_vc)
         else:
             await user_vc.connect()
-        await interaction.followup.send("Alright, I'm here. What?")
+        vc = interaction.guild.voice_client
+        # Start listening for speech.
+        async def on_utterance(text, _guild=interaction.guild):
+            reply = await bot._respond("someone in voice", text)
+            if reply:
+                # Also drop it in text so there's a record.
+                await _speak_in_voice(_guild, reply)
+        old = bot._listeners.get(interaction.guild.id)
+        if old:
+            old.stop()
+        listener = listen_mod.Listener(bot, vc, on_utterance)
+        if listener.start():
+            bot._listeners[interaction.guild.id] = listener
+            await interaction.followup.send(
+                "Alright, I'm here and listening. Talk to me.")
+        else:
+            await interaction.followup.send("Alright, I'm here. What?")
     except Exception as e:  # noqa: BLE001
         await interaction.followup.send(f"Couldn't join: {e}")
 
@@ -293,6 +311,9 @@ async def leave_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(
             "I'm not in voice.", ephemeral=True)
         return
+    old = bot._listeners.pop(interaction.guild.id, None)
+    if old:
+        old.stop()
     await vc.disconnect()
     await interaction.response.send_message("Fine, I'm leaving.")
 
