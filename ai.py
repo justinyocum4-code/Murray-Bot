@@ -11,10 +11,9 @@ async def _pick_model():
     if not key:
         return
     # Try models in order; yield the first that works.
-    # qwen first: less aggressive safety refusals on playful banter.
+    # qwen/qwen3-32b 404s on Groq — removed until correct ID confirmed.
     # llama-3.3-70b-versatile was shut down by Groq Aug 2026 — removed.
-    for model in ("qwen/qwen3-32b", "openai/gpt-oss-20b",
-                  "openai/gpt-oss-120b"):
+    for model in ("openai/gpt-oss-20b", "openai/gpt-oss-120b"):
         yield model
 
 
@@ -35,11 +34,13 @@ def _looks_like_refusal(text):
     t = (text or "").lower()
     if any(p in t for p in REFUSAL_PHRASES):
         return True
-    # Short apology-flavored replies are almost always refusals;
-    # Murray himself never apologizes.
-    if len(t) < 300 and ("sorry" in t and
-                         ("can't" in t or "cannot" in t or "won't" in t
-                          or "unable" in t)):
+    # Broader catch: any apology word + any refusal word in a short reply.
+    # Murray himself never apologizes, so this is safe.
+    apology = ("sorry", "apologize", "apologies")
+    refusal = ("can't", "cannot", "won't", "unable", "not able",
+               "not comfortable", "inappropriate")
+    if len(t) < 400 and any(a in t for a in apology) \
+            and any(r in t for r in refusal):
         return True
     return False
 
@@ -120,7 +121,8 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
             text = data["choices"][0]["message"]["content"].strip()
             if text:
                 if _looks_like_refusal(text):
-                    print(f"ai_chat: {model} refused, trying next model",
+                    print(f"ai_chat: {model} refused, trying next model. "
+                          f"Text was: {text[:200]}",
                           flush=True, file=sys.stderr)
                     continue
                 return text
