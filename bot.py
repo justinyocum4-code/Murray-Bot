@@ -1,5 +1,6 @@
 """Old Man Murray — AI character Discord bot + character dashboard."""
 import asyncio
+import io
 import hashlib
 import json
 import os
@@ -271,9 +272,24 @@ class MurrayBot(commands.Bot):
                     message.author.display_name,
                     f"[voice note transcript: {text}]")
                 if reply:
+                    # Murray answers voice notes with a voice message.
+                    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "")
+                    audio_bytes = None
+                    if voice_id:
+                        try:
+                            audio_bytes = await voice_mod.text_to_speech(
+                                voice_id, reply[:500])
+                        except Exception:
+                            audio_bytes = None
+                    files = []
+                    if audio_bytes:
+                        files.append(discord.File(
+                            io.BytesIO(audio_bytes),
+                            filename="murray-voice-message.mp3"))
                     await message.reply(
                         f'_heard: "{text[:200]}"_\n{reply[:1400]}',
-                        mention_author=False)
+                        mention_author=False,
+                        files=files if files else None)
                     await _speak_in_voice(message.guild, reply)
         except Exception as e:  # noqa: BLE001
             print(f"voice note failed: {e}", flush=True)
