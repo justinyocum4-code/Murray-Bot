@@ -62,7 +62,7 @@ async def save_character(data, char_id=None):
     allowed = ("name", "avatar_url", "tagline", "greeting", "personality",
                "example_dialogue", "scenario", "tags", "visibility",
                "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
-               "text_channel_id")
+               "text_channel_id", "speech_style", "quirks", "never_says")
     payload = {k: data.get(k) for k in allowed if k in data}
     # If this one is being activated, deactivate the others first.
     try:
@@ -159,6 +159,12 @@ def build_system_prompt(char):
         parts.append(char["tagline"])
     if char.get("personality"):
         parts.append(char["personality"])
+    if char.get("speech_style"):
+        parts.append(f"Speech style: {char['speech_style']}")
+    if char.get("quirks"):
+        parts.append(f"Quirks (use sparingly, not every reply): {char['quirks']}")
+    if char.get("never_says"):
+        parts.append(f"NEVER do this: {char['never_says']}")
     if char.get("scenario"):
         parts.append(f"Scenario: {char['scenario']}")
     if char.get("example_dialogue"):

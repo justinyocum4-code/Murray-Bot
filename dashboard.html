@@ -48,6 +48,15 @@ placeholder="What do you want, kid? Make it quick."></textarea>
 <label for="f-personality">Personality (traits, speech style, backstory)</label>
 <textarea id="f-personality" style="min-height:9em"
 placeholder="Describe who they are, how they talk, what they love and hate…"></textarea>
+<label for="f-speech">Speech style (how they talk)</label>
+<input type="text" id="f-speech" style="width:100%"
+placeholder="e.g. short gruff sentences, dry sarcasm">
+<label for="f-quirks">Quirks & habits (used sparingly)</label>
+<input type="text" id="f-quirks" style="width:100%"
+placeholder="e.g. calls people kid once in a blue moon">
+<label for="f-never">Never says / avoids</label>
+<input type="text" id="f-never" style="width:100%"
+placeholder="e.g. repeating the same band every reply">
 <label for="f-dialogue">Example dialogue (shows the AI how to speak)</label>
 <textarea id="f-dialogue" style="min-height:6em"
 placeholder="You: …&#10;Character: …"></textarea>
@@ -129,6 +138,9 @@ function edit(id){
   $("f-tagline").value=c.tagline||"";
   $("f-greeting").value=c.greeting||"";
   $("f-personality").value=c.personality||"";
+  $("f-speech").value=c.speech_style||"";
+  $("f-quirks").value=c.quirks||"";
+  $("f-never").value=c.never_says||"";
   $("f-dialogue").value=c.example_dialogue||"";
   $("f-scenario").value=c.scenario||"";
   $("f-tags").value=c.tags||"";
@@ -168,6 +180,9 @@ $("form").onsubmit=async e=>{
     tagline:$("f-tagline").value.trim(),
     greeting:$("f-greeting").value.trim(),
     personality:$("f-personality").value.trim(),
+    speech_style:$("f-speech").value.trim(),
+    quirks:$("f-quirks").value.trim(),
+    never_says:$("f-never").value.trim(),
     example_dialogue:$("f-dialogue").value.trim(),
     scenario:$("f-scenario").value.trim(),
     tags:$("f-tags").value.trim(),
