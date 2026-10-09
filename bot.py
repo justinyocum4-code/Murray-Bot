@@ -137,6 +137,28 @@ class MurrayBot(commands.Bot):
         print(f"web listening on 0.0.0.0:{port}", flush=True)
         # Seed Murray on first run (needs Supabase configured).
         asyncio.create_task(characters.ensure_seed())
+        asyncio.create_task(self._ensure_voice())
+
+    async def _ensure_voice(self):
+        """Create Murray's cloned voice on first run if needed."""
+        await asyncio.sleep(5)  # let the bot finish starting
+        if (os.environ.get("ELEVENLABS_VOICE_ID")
+                or not os.environ.get("ELEVENLABS_API_KEY")):
+            return
+        here = os.path.dirname(os.path.abspath(__file__))
+        clip = os.path.join(here, "murray-voice.mp3")
+        if not os.path.exists(clip):
+            print("voice clip not found, skipping clone", flush=True)
+            return
+        print("creating Murray's cloned voice…", flush=True)
+        with open(clip, "rb") as f:
+            voice_id = await voice_mod.create_cloned_voice(
+                "Old Man Murray", f.read())
+        if voice_id:
+            print(f"MURRAY_VOICE_ID={voice_id}", flush=True)
+            print("Add that as ELEVENLABS_VOICE_ID on Render.", flush=True)
+        else:
+            print("voice clone failed — check the API key.", flush=True)
 
     async def on_ready(self):
         print(f"logged in as {self.user} ({self.user.id})", flush=True)
