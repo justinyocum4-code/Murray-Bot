@@ -28,7 +28,12 @@ async def create_cloned_voice(name, audio_bytes, filename="voice.mp3"):
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as r:
                 if r.status != 200:
-                    print(f"voice clone failed: {r.status}", flush=True)
+                    try:
+                        detail = (await r.text())[:500]
+                    except Exception:  # noqa: BLE001
+                        detail = "?"
+                    print(f"voice clone failed: {r.status} {detail}",
+                          flush=True)
                     return None
                 data = await r.json()
                 return data.get("voice_id")
