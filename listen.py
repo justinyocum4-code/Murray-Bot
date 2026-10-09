@@ -223,6 +223,12 @@ class Listener:
         if dur < MIN_SPEECH or len(pcm) < 8000:
             return
         wav = _pcm_to_wav(pcm)
+        # Debug: save the raw audio so we can hear what Murray hears.
+        try:
+            with open("/tmp/murray_last_heard.wav", "wb") as f:
+                f.write(wav)
+        except Exception:
+            pass
         text = await transcribe(wav)
         if not text or len(text) < 3:
             return

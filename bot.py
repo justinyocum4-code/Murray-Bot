@@ -73,9 +73,19 @@ class MurrayBot(commands.Bot):
         return char or self._char_cache
 
     async def setup_hook(self):
+        async def _debug_audio(request):
+            # Serve the last captured utterance so we can hear what he hears.
+            try:
+                with open("/tmp/murray_last_heard.wav", "rb") as f:
+                    data = f.read()
+                return web.Response(body=data, content_type="audio/wav")
+            except FileNotFoundError:
+                return web.Response(text="no audio captured yet", status=404)
+
         app = web.Application()
         app.router.add_get("/health", lambda r: web.Response(text="ok"))
         app.router.add_get("/", lambda r: web.Response(text="ok"))
+        app.router.add_get("/debug_audio", _debug_audio)
 
         # ---- Dashboard pages ----
         async def login_page(request):
