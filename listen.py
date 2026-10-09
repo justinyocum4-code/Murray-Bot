@@ -12,7 +12,20 @@ import discord
 
 try:
     from discord.ext import voice_recv
+    from discord.ext.voice_recv import opus as _vr_opus
     HAVE_VOICE_RECV = True
+
+    # One corrupted voice packet must not kill the router thread.
+    _orig_decode_packet = _vr_opus.PacketDecoder._decode_packet
+
+    def _safe_decode_packet(self, packet):
+        try:
+            return _orig_decode_packet(self, packet)
+        except Exception as e:  # noqa: BLE001
+            print(f"opus decode skipped bad packet: {e}", flush=True)
+            return packet, b""
+
+    _vr_opus.PacketDecoder._decode_packet = _safe_decode_packet
 except ImportError:
     HAVE_VOICE_RECV = False
 
