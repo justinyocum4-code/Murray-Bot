@@ -27,14 +27,15 @@ def configured():
     return bool(url and key)
 
 
-async def list_characters():
+async def list_characters(bot_id=None):
     url, _ = _cfg()
     if not configured():
         return []
     try:
+        filt = f"&bot_id=eq.{bot_id}" if bot_id else "&bot_id=is.null"
         async with aiohttp.ClientSession() as s:
             async with s.get(
-                f"{url}/rest/v1/{TABLE}?select=*&order=updated_at.desc",
+                f"{url}/rest/v1/{TABLE}?select=*&order=updated_at.desc{filt}",
                 headers=_headers(),
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as r:
@@ -45,8 +46,8 @@ async def list_characters():
         return []
 
 
-async def get_active_character():
-    chars = await list_characters()
+async def get_active_character(bot_id=None):
+    chars = await list_characters(bot_id)
     for c in chars:
         if c.get("is_active"):
             return c
@@ -64,13 +65,17 @@ async def save_character(data, char_id=None):
                "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
                "text_channel_id", "speech_style", "quirks", "never_says",
                "banned_phrases", "banned_topics", "reply_length",
-               "character_memory", "temperature", "repetition_penalty")
+               "character_memory", "temperature", "repetition_penalty",
+               "bot_id")
     payload = {k: data.get(k) for k in allowed if k in data}
-    # If this one is being activated, deactivate the others first.
+    # Normalize empty bot_id to None (the default/env bot).
+    if not payload.get("bot_id"):
+        payload["bot_id"] = None
+    # If this one is being activated, deactivate the others for the same bot.
     try:
         async with aiohttp.ClientSession() as s:
             if payload.get("is_active"):
-                others = await list_characters()
+                others = await list_characters(payload.get("bot_id"))
                 for o in others:
                     if str(o.get("id")) != str(char_id or "") and o.get("is_active"):
                         await s.patch(
@@ -108,6 +113,76 @@ async def delete_character(char_id):
         async with aiohttp.ClientSession() as s:
             async with s.delete(
                 f"{url}/rest/v1/{TABLE}?id=eq.{char_id}",
+                headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                return r.status in (200, 204)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+BOT_TABLE = "murray_bots"
+
+
+async def list_bots():
+    """All bot rows, newest first."""
+    url, _ = _cfg()
+    if not configured():
+        return []
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{url}/rest/v1/{BOT_TABLE}?select=*&order=created_at.desc",
+                headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                if r.status != 200:
+                    return []
+                return await r.json()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def save_bot(data, bot_id=None):
+    """Create or update a bot row. Returns the saved row or None."""
+    url, _ = _cfg()
+    if not configured():
+        return None
+    allowed = ("name", "discord_token", "is_active")
+    payload = {k: data.get(k) for k in allowed if k in data}
+    try:
+        async with aiohttp.ClientSession() as s:
+            if bot_id:
+                async with s.patch(
+                    f"{url}/rest/v1/{BOT_TABLE}?id=eq.{bot_id}",
+                    headers=_headers(), json=payload,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    if r.status not in (200, 204):
+                        return None
+                    rows = await r.json() if r.status == 200 else []
+                    return rows[0] if rows else {"id": bot_id, **payload}
+            else:
+                async with s.post(
+                    f"{url}/rest/v1/{BOT_TABLE}", headers=_headers(),
+                    json=payload, timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    if r.status not in (200, 201):
+                        return None
+                    rows = await r.json()
+                    return rows[0] if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def delete_bot(bot_id):
+    url, _ = _cfg()
+    if not configured():
+        return False
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.delete(
+                f"{url}/rest/v1/{BOT_TABLE}?id=eq.{bot_id}",
                 headers=_headers(),
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as r:

@@ -28,7 +28,16 @@ button.ghost{background:#333;color:#f5c518}
 <h1>AI Character Dashboard</h1>
 <p id="status" role="status"></p>
 
-<h2>Characters</h2>
+<h2>Bots</h2>
+<p class="muted">Each bot is a separate Discord bot — just paste its token. Pick a bot to manage its characters.</p>
+<div id="bot-list"><p class="muted">Loading…</p></div>
+<label for="f-bot-name">New bot name</label>
+<input type="text" id="f-bot-name" placeholder="e.g. Old Man Murray">
+<label for="f-bot-token">Discord bot token (paste once — stored securely)</label>
+<input type="text" id="f-bot-token" placeholder="Paste token here" autocomplete="off">
+<button type="button" id="btn-bot-add">Add bot</button>
+
+<h2>Characters for <span id="cur-bot-name">Main bot</span></h2>
 <div id="list"><p class="muted">Loading…</p></div>
 <button id="btn-new" type="button">+ New character</button>
 
@@ -132,6 +141,8 @@ const $=id=>document.getElementById(id);
 const say=m=>{$("status").textContent=m;};
 let chars=[];
 let loreEntries=[];
+let bots=[];
+let curBotId=null;  // null = main bot (DISCORD_TOKEN env)
 
 function setSlider(id,val,def){
   const el=$(id);
@@ -142,15 +153,82 @@ $("f-temp").oninput=e=>{$("f-temp-val").textContent=e.target.value;};
 $("f-rep").oninput=e=>{$("f-rep-val").textContent=e.target.value;};
 
 async function load(){
-  say("Loading characters…");
+  say("Loading…");
   try{
-    const r=await fetch("/api/characters");
+    const br=await fetch("/api/bots");
+    const bd=await br.json();
+    bots=bd.bots||[];
+    renderBots();
+    const r=await fetch("/api/characters"+(curBotId?"?bot_id="+encodeURIComponent(curBotId):""));
     const d=await r.json();
     chars=d.characters||[];
     render();
     say(chars.length?chars.length+" character(s) loaded.":"No characters yet.");
   }catch(e){say("Couldn't load. Is Supabase set up on Render?");}
 }
+function curBotName(){
+  if(!curBotId)return "Main bot";
+  const b=bots.find(x=>String(x.id)===String(curBotId));
+  return b?(b.name||"Bot"):"Bot";
+}
+function renderBots(){
+  const box=$("bot-list");box.innerHTML="";
+  const mk=(id,name,active,isMain)=>{
+    const div=document.createElement("div");
+    div.className="card"+(String(id)===String(curBotId)?" active":"");
+    const h=document.createElement("h3");
+    h.textContent=(String(id)===String(curBotId)?"★ ":"")+name+(active?"":" (off)");
+    h.style.margin="0 0 .3em";h.style.color="#f5c518";
+    div.appendChild(h);
+    if(!isMain||true){
+      const sb=document.createElement("button");
+      sb.type="button";sb.textContent="Select";
+      sb.onclick=()=>{curBotId=id;$("cur-bot-name").textContent=curBotName();$("form").reset();$("f-id").value="";load();};
+      div.appendChild(sb);
+    }
+    if(!isMain){
+      const tb=document.createElement("button");
+      tb.type="button";tb.textContent=active?"Turn off":"Turn on";tb.className="ghost";
+      tb.onclick=async ()=>{
+        const r=await fetch("/api/bots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:id,is_active:!active})});
+        const d=await r.json();say(d.ok?"Saved. Restart needed for bot on/off.":"Save failed.");load();
+      };
+      const db=document.createElement("button");
+      db.type="button";db.textContent="Delete";db.className="ghost";
+      db.onclick=async ()=>{
+        if(!confirm("Delete bot "+name+"? Its characters stay but lose their bot."))return;
+        const r=await fetch("/api/bots/"+id,{method:"DELETE"});
+        const d=await r.json();say(d.ok?"Deleted.":"Delete failed.");
+        if(String(curBotId)===String(id)){curBotId=null;$("cur-bot-name").textContent=curBotName();}
+        load();
+      };
+      div.appendChild(tb);div.appendChild(db);
+    }else{
+      const p=document.createElement("p");
+      p.className="muted";p.style.margin="0";
+      p.textContent="Runs on the DISCORD_TOKEN env var. Restart the service after changing it on Render.";
+      div.appendChild(p);
+    }
+    box.appendChild(div);
+  };
+  mk(null,"Main bot",true,true);
+  for(const b of bots)mk(b.id,b.name||"Unnamed",!!b.is_active,false);
+  $("cur-bot-name").textContent=curBotName();
+}
+$("btn-bot-add").onclick=async ()=>{
+  const name=$("f-bot-name").value.trim();
+  const token=$("f-bot-token").value.trim();
+  if(!name||!token){say("Name and token are both required.");return;}
+  say("Adding bot… (restart the Render service after adding for it to connect)");
+  try{
+    const r=await fetch("/api/bots",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name:name,discord_token:token,is_active:true})});
+    const d=await r.json();
+    if(d.ok){say("Bot added. Restart the Render service for it to connect.");$("f-bot-name").value="";$("f-bot-token").value="";load();}
+    else say("Add failed.");
+  }catch(e){say("Add failed — check your connection.");}
+};
 function render(){
   const box=$("list");box.innerHTML="";
   if(!chars.length){box.innerHTML='<p class="muted">None yet — make one below.</p>';return;}
@@ -229,6 +307,7 @@ $("form").onsubmit=async e=>{
   say("Saving…");
   const body={
     id:$("f-id").value||undefined,
+    bot_id:curBotId||null,
     name:$("f-name").value.trim(),
     avatar_url:$("f-avatar").value.trim(),
     tagline:$("f-tagline").value.trim(),

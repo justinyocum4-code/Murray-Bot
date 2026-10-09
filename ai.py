@@ -19,6 +19,7 @@ async def _pick_model():
 async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
                frequency_penalty=0.5):
     """Freeform character chat via Groq. Returns reply text or None."""
+    import sys
     key = os.environ.get("GROQ_API_KEY")
     if not key or not (user_text or "").strip():
         return None
@@ -42,11 +43,18 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
                     timeout=timeout,
                 ) as resp:
                     if resp.status != 200:
+                        print(f"ai_chat: {model} returned {resp.status}",
+                              flush=True, file=sys.stderr)
                         continue
                     data = await resp.json()
             text = data["choices"][0]["message"]["content"].strip()
             if text:
                 return text
-        except Exception:  # noqa: BLE001
+            print(f"ai_chat: {model} returned empty text",
+                  flush=True, file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"ai_chat: {model} failed: {type(e).__name__}: {e}",
+                  flush=True, file=sys.stderr)
             continue
+    print("ai_chat: all models failed", flush=True, file=sys.stderr)
     return None

@@ -24,6 +24,19 @@ except ImportError:
     HAVE_VR = False
 
 SESSIONS = {}  # token -> expiry
+BOTS = {}  # bot_id (None = env-token default bot) -> MurrayBot instance
+_WEB_STARTED = False
+
+
+def bust_cache(bot_id=None):
+    """Clear the character cache for one bot (or all with "all")."""
+    if bot_id == "all":
+        for b in BOTS.values():
+            b._char_cache = None
+        return
+    b = BOTS.get(bot_id)
+    if b:
+        b._char_cache = None
 
 
 def _dashboard_password():
@@ -53,10 +66,11 @@ async def _load_dashboard_html():
 
 
 class MurrayBot(commands.Bot):
-    def __init__(self):
+    def __init__(self, bot_id=None):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
+        self._bot_id = bot_id
         self._cooldown = {}
         self._char_cache = None
         self._char_cache_at = 0
@@ -67,7 +81,7 @@ class MurrayBot(commands.Bot):
         now = time.time()
         if self._char_cache and now - self._char_cache_at < 60:
             return self._char_cache
-        char = await characters.get_active_character()
+        char = await characters.get_active_character(self._bot_id)
         if char:
             self._char_cache = char
             self._char_cache_at = now
@@ -113,7 +127,8 @@ class MurrayBot(commands.Bot):
 
         @_require_auth
         async def api_list(request):
-            chars = await characters.list_characters()
+            bot_id = request.query.get("bot_id") or None
+            chars = await characters.list_characters(bot_id)
             # Don't leak anything sensitive; rows are Justin's own.
             return web.json_response({"characters": chars})
 
@@ -124,13 +139,15 @@ class MurrayBot(commands.Bot):
             except Exception:  # noqa: BLE001
                 return web.json_response({"error": "bad json"}, status=400)
             char_id = body.get("id")
+            if not body.get("bot_id"):
+                body["bot_id"] = None
             saved = await characters.save_character(body, char_id)
             if not saved:
                 return web.json_response(
                     {"error": "save failed (check Supabase setup)"},
                     status=500)
-            # Bust the bot's cache so the new personality takes effect.
-            self._char_cache = None
+            # Bust the right bot's cache so the new personality takes effect.
+            bust_cache(saved.get("bot_id"))
             return web.json_response({"ok": True, "character": saved})
 
         @_require_auth
@@ -138,7 +155,7 @@ class MurrayBot(commands.Bot):
             char_id = request.match_info["char_id"]
             ok = await characters.delete_character(char_id)
             if ok:
-                self._char_cache = None
+                bust_cache("all")
             return web.json_response({"ok": ok})
 
         @_require_auth
@@ -189,6 +206,32 @@ class MurrayBot(commands.Bot):
             ok = await characters.delete_lorebook(entry_id)
             return web.json_response({"ok": ok})
 
+        @_require_auth
+        async def api_bot_list(request):
+            bots = await characters.list_bots()
+            safe = [{k: v for k, v in b.items() if k != "discord_token"}
+                    for b in bots]
+            return web.json_response({"bots": safe})
+
+        @_require_auth
+        async def api_bot_save(request):
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                return web.json_response({"error": "bad json"}, status=400)
+            bot_id = body.get("id")
+            saved = await characters.save_bot(body, bot_id)
+            if not saved:
+                return web.json_response({"error": "save failed"}, status=500)
+            return web.json_response({"ok": True, "bot": {
+                k: v for k, v in saved.items() if k != "discord_token"}})
+
+        @_require_auth
+        async def api_bot_delete(request):
+            bot_id = request.match_info["bot_id"]
+            ok = await characters.delete_bot(bot_id)
+            return web.json_response({"ok": ok})
+
         app.router.add_get("/dashboard/login", login_page)
         app.router.add_post("/dashboard/login", login_post)
         app.router.add_get("/dashboard", dashboard_page)
@@ -199,15 +242,20 @@ class MurrayBot(commands.Bot):
         app.router.add_get("/api/lorebook", api_lore_list)
         app.router.add_post("/api/lorebook", api_lore_save)
         app.router.add_delete("/api/lorebook/{entry_id}", api_lore_delete)
+        app.router.add_get("/api/bots", api_bot_list)
+        app.router.add_post("/api/bots", api_bot_save)
+        app.router.add_delete("/api/bots/{bot_id}", api_bot_delete)
 
-        runner = web.AppRunner(app)
-        await runner.setup()
-        port = int(os.environ.get("PORT", "8000"))
-        await web.TCPSite(runner, "0.0.0.0", port).start()
-        print(f"web listening on 0.0.0.0:{port}", flush=True)
-        # Seed Murray on first run (needs Supabase configured).
-        asyncio.create_task(characters.ensure_seed())
-        asyncio.create_task(self._ensure_voice())
+        global _WEB_STARTED
+        if not _WEB_STARTED:
+            _WEB_STARTED = True
+            runner = web.AppRunner(app)
+            await runner.setup()
+            port = int(os.environ.get("PORT", "8000"))
+            await web.TCPSite(runner, "0.0.0.0", port).start()
+            print(f"web listening on 0.0.0.0:{port}", flush=True)
+            # Seed Murray on first run (needs Supabase configured).
+            asyncio.create_task(characters.ensure_seed())
 
     async def _ensure_voice(self):
         """Create Murray's cloned voice on first run if needed."""
@@ -284,11 +332,11 @@ class MurrayBot(commands.Bot):
             old.stop()
 
         async def on_utterance(text, _guild=guild):
-            reply = await bot._respond("someone in voice", text)
+            reply = await self._respond("someone in voice", text)
             if reply:
                 await _speak_in_voice(_guild, reply)
 
-        listener = listen_mod.Listener(bot, vc, on_utterance)
+        listener = listen_mod.Listener(self, vc, on_utterance)
         if listener.start():
             self._listeners[guild.id] = listener
             return True
@@ -326,6 +374,9 @@ class MurrayBot(commands.Bot):
                              frequency_penalty=characters.get_repetition_penalty(char))
         if reply and char:
             reply = characters.apply_banned_phrases(reply, char)
+        if not reply:
+            # Never go silent — fall back to an in-character shrug.
+            reply = "Bah, lost my train of thought there. Run that by me again."
         return reply
 
     async def _handle_voice_note(self, message, attachment):
@@ -445,125 +496,173 @@ async def _speak_in_voice(guild, text):
         print(f"voice play failed: {e}", flush=True)
 
 
-bot = MurrayBot()
-
-
-@bot.tree.command(name="murray", description="Ask the character something.")
-@app_commands.describe(question="What do you want to ask?")
-async def murray_cmd(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()
-    reply = await bot._respond(interaction.user.display_name,
-                               question[:500])
-    if not reply:
-        await interaction.followup.send(
-            "Hmm, no answer came back. Try again in a bit.")
-        return
-    await interaction.followup.send(reply[:1500])
-
-
-@bot.tree.command(name="join",
-                  description="Bring the character to his hangout channel.")
-async def join_cmd(interaction: discord.Interaction):
-    await interaction.response.defer()
-    vc = await bot._join_hangout(interaction.guild)
-    if vc is None:
-        await interaction.followup.send(
-            "No hangout set. Use /sethangout to pick my channel first.")
-        return
-    if bot._start_listening(interaction.guild, vc):
-        await interaction.followup.send(
-            "Alright, I'm in my hangout and listening. Come talk to me.")
-    else:
-        await interaction.followup.send("Alright, I'm in my hangout.")
-
-
-@bot.tree.command(name="leave",
-                  description="Send the character out of voice.")
-async def leave_cmd(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc is None or not vc.is_connected():
-        await interaction.response.send_message(
-            "I'm not in voice.", ephemeral=True)
-        return
-    old = bot._listeners.pop(interaction.guild.id, None)
-    if old:
-        old.stop()
-    await vc.disconnect()
-    await interaction.response.send_message("Fine, I'm leaving.")
-
-
-@bot.tree.command(name="say",
-                  description="Make the character say something out loud.")
-@app_commands.describe(text="What should he say?")
-async def say_cmd(interaction: discord.Interaction, text: str):
-    vc = interaction.guild.voice_client
-    if vc is None or not vc.is_connected():
-        await interaction.response.send_message(
-            "Get me into a voice channel with /join first.",
-            ephemeral=True)
-        return
-    await interaction.response.defer()
-    await _speak_in_voice(interaction.guild, text[:500])
-    await interaction.followup.send("Said it.")
-
-
-@bot.tree.command(name="sethangout",
-                  description="Pick Murray's dedicated voice channel.")
-@app_commands.describe(channel="His hangout — he'll only talk here.")
-async def sethangout_cmd(interaction: discord.Interaction,
-                         channel: discord.VoiceChannel):
-    await interaction.response.defer(ephemeral=True)
-    char = await bot.get_character()
-    if char and char.get("id"):
-        saved = await characters.save_character(
-            {"voice_channel_id": str(channel.id)}, char["id"])
-        if saved:
-            bot._char_cache = None
-            # Move him there now.
-            old_vc = interaction.guild.voice_client
-            if old_vc and old_vc.is_connected():
-                try:
-                    await old_vc.disconnect()
-                except Exception:  # noqa: BLE001
-                    pass
-            old_l = bot._listeners.pop(interaction.guild.id, None)
-            if old_l:
-                old_l.stop()
-            vc = await bot._join_hangout(interaction.guild)
-            if vc and bot._start_listening(interaction.guild, vc):
-                await interaction.followup.send(
-                    f"My hangout is {channel.name}. Come find me there, kid.")
-            elif vc:
-                await interaction.followup.send(
-                    f"My hangout is {channel.name}.")
-            else:
-                await interaction.followup.send(
-                    "Saved, but I couldn't join it. Check my permissions.")
-            return
-    await interaction.followup.send("Couldn't save that. Try again.")
-
-
-@bot.tree.command(name="setlounge",
-                  description="Pick Murray's text lounge — he answers here.")
-@app_commands.describe(channel="His text channel — no mention needed.")
-async def setlounge_cmd(interaction: discord.Interaction,
-                        channel: discord.TextChannel):
-    await interaction.response.defer(ephemeral=True)
-    char = await bot.get_character()
-    if char and char.get("id"):
-        saved = await characters.save_character(
-            {"text_channel_id": str(channel.id)}, char["id"])
-        if saved:
-            bot._char_cache = None
+def register_commands(bot):
+    """Register slash commands on a bot instance."""
+    @bot.tree.command(name="murray", description="Ask the character something.")
+    @app_commands.describe(question="What do you want to ask?")
+    async def murray_cmd(interaction: discord.Interaction, question: str):
+        await interaction.response.defer()
+        reply = await interaction.client._respond(interaction.user.display_name,
+                                   question[:500])
+        if not reply:
             await interaction.followup.send(
-                f"My lounge is {channel.name}. Just type, kid — I'm listening.")
+                "Hmm, no answer came back. Try again in a bit.")
             return
-    await interaction.followup.send("Couldn't save that. Try again.")
+        await interaction.followup.send(reply[:1500])
+
+
+    @bot.tree.command(name="join",
+                      description="Bring the character to his hangout channel.")
+    async def join_cmd(interaction: discord.Interaction):
+        await interaction.response.defer()
+        vc = await interaction.client._join_hangout(interaction.guild)
+        if vc is None:
+            await interaction.followup.send(
+                "No hangout set. Use /sethangout to pick my channel first.")
+            return
+        if interaction.client._start_listening(interaction.guild, vc):
+            await interaction.followup.send(
+                "Alright, I'm in my hangout and listening. Come talk to me.")
+        else:
+            await interaction.followup.send("Alright, I'm in my hangout.")
+
+
+    @bot.tree.command(name="leave",
+                      description="Send the character out of voice.")
+    async def leave_cmd(interaction: discord.Interaction):
+        vc = interaction.guild.voice_client
+        if vc is None or not vc.is_connected():
+            await interaction.response.send_message(
+                "I'm not in voice.", ephemeral=True)
+            return
+        old = interaction.client._listeners.pop(interaction.guild.id, None)
+        if old:
+            old.stop()
+        await vc.disconnect()
+        await interaction.response.send_message("Fine, I'm leaving.")
+
+
+    @bot.tree.command(name="say",
+                      description="Make the character say something out loud.")
+    @app_commands.describe(text="What should he say?")
+    async def say_cmd(interaction: discord.Interaction, text: str):
+        vc = interaction.guild.voice_client
+        if vc is None or not vc.is_connected():
+            await interaction.response.send_message(
+                "Get me into a voice channel with /join first.",
+                ephemeral=True)
+            return
+        await interaction.response.defer()
+        await _speak_in_voice(interaction.guild, text[:500])
+        await interaction.followup.send("Said it.")
+
+
+    @bot.tree.command(name="sethangout",
+                      description="Pick Murray's dedicated voice channel.")
+    @app_commands.describe(channel="His hangout — he'll only talk here.")
+    async def sethangout_cmd(interaction: discord.Interaction,
+                             channel: discord.VoiceChannel):
+        await interaction.response.defer(ephemeral=True)
+        char = await interaction.client.get_character()
+        if char and char.get("id"):
+            saved = await characters.save_character(
+                {"voice_channel_id": str(channel.id)}, char["id"])
+            if saved:
+                interaction.client._char_cache = None
+                # Move him there now.
+                old_vc = interaction.guild.voice_client
+                if old_vc and old_vc.is_connected():
+                    try:
+                        await old_vc.disconnect()
+                    except Exception:  # noqa: BLE001
+                        pass
+                old_l = interaction.client._listeners.pop(interaction.guild.id, None)
+                if old_l:
+                    old_l.stop()
+                vc = await interaction.client._join_hangout(interaction.guild)
+                if vc and interaction.client._start_listening(interaction.guild, vc):
+                    await interaction.followup.send(
+                        f"My hangout is {channel.name}. Come find me there, kid.")
+                elif vc:
+                    await interaction.followup.send(
+                        f"My hangout is {channel.name}.")
+                else:
+                    await interaction.followup.send(
+                        "Saved, but I couldn't join it. Check my permissions.")
+                return
+        await interaction.followup.send("Couldn't save that. Try again.")
+
+
+    @bot.tree.command(name="setlounge",
+                      description="Pick Murray's text lounge — he answers here.")
+    @app_commands.describe(channel="His text channel — no mention needed.")
+    async def setlounge_cmd(interaction: discord.Interaction,
+                            channel: discord.TextChannel):
+        await interaction.response.defer(ephemeral=True)
+        char = await interaction.client.get_character()
+        if char and char.get("id"):
+            saved = await characters.save_character(
+                {"text_channel_id": str(channel.id)}, char["id"])
+            if saved:
+                interaction.client._char_cache = None
+                await interaction.followup.send(
+                    f"My lounge is {channel.name}. Just type, kid — I'm listening.")
+                return
+        await interaction.followup.send("Couldn't save that. Try again.")
+
+
+
+async def _bot_watcher():
+    """Poll for new/removed bots so dashboard changes take effect live."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            seen = set()
+            for brow in await characters.list_bots():
+                bid = brow["id"]
+                tok = (brow.get("discord_token") or "").strip()
+                if brow.get("is_active") and tok:
+                    seen.add(bid)
+                    if bid not in BOTS:
+                        b = MurrayBot(bot_id=bid)
+                        register_commands(b)
+                        BOTS[bid] = b
+                        print(f"starting new Discord bot {bid}…", flush=True)
+                        asyncio.create_task(b.start(tok))
+            # Stop bots that were deactivated or deleted.
+            for bid in list(BOTS):
+                if bid is not None and bid not in seen:
+                    b = BOTS.pop(bid)
+                    print(f"stopping Discord bot {bid}…", flush=True)
+                    try:
+                        await b.close()
+                    except Exception:
+                        pass
+        except Exception as e:  # noqa: BLE001
+            print(f"bot watcher: {e}", flush=True)
+
+
+async def main():
+    """Start all configured Discord bots (web server starts via setup_hook)."""
+    to_start = []
+    env_token = os.environ.get("DISCORD_TOKEN")
+    if env_token:
+        to_start.append((None, env_token))
+    for brow in await characters.list_bots():
+        tok = (brow.get("discord_token") or "").strip()
+        if brow.get("is_active") and tok:
+            to_start.append((brow["id"], tok))
+    if not to_start:
+        print("No Discord bots configured.", flush=True)
+    for bot_id, token in to_start:
+        b = MurrayBot(bot_id=bot_id)
+        register_commands(b)
+        BOTS[bot_id] = b
+        print(f"starting Discord bot {bot_id or 'default'}…", flush=True)
+        asyncio.create_task(b.start(token))
+    asyncio.create_task(_bot_watcher())
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
-    token = os.environ.get("DISCORD_TOKEN")
-    if not token:
-        print("DISCORD_TOKEN is not set.", file=sys.stderr, flush=True)
-        sys.exit(1)
-    bot.run(token)
+    asyncio.run(main())
