@@ -66,3 +66,25 @@ async def text_to_speech(voice_id, text):
     except Exception as e:  # noqa: BLE001
         print(f"tts error: {e}", flush=True)
         return None
+
+
+async def list_voices():
+    """Return the account's available voices. Logs name/age/gender for picking."""
+    key = _key()
+    if not key:
+        return []
+    try:
+        async with aiohttp.ClientSession() as s_:
+            async with s_.get(
+                f"{API}/voices",
+                headers={"xi-api-key": key},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as r:
+                if r.status != 200:
+                    print(f"voice list failed: {r.status}", flush=True)
+                    return []
+                data = await r.json()
+                return data.get("voices", [])
+    except Exception as e:  # noqa: BLE001
+        print(f"voice list error: {e}", flush=True)
+        return []

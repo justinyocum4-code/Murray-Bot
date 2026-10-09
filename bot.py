@@ -157,8 +157,16 @@ class MurrayBot(commands.Bot):
         if voice_id:
             print(f"MURRAY_VOICE_ID={voice_id}", flush=True)
             print("Add that as ELEVENLABS_VOICE_ID on Render.", flush=True)
-        else:
-            print("voice clone failed — check the API key.", flush=True)
+            return
+        # Cloning needs a paid plan — fall back to listing stock voices
+        # so we can pick an elderly one.
+        print("clone unavailable, listing stock voices…", flush=True)
+        voices = await voice_mod.list_voices()
+        for v in voices:
+            labels = v.get("labels", {})
+            print(f"VOICE name={v.get('name')} id={v.get('voice_id')} "
+                  f"age={labels.get('age')} gender={labels.get('gender')} "
+                  f"use={v.get('category')}", flush=True)
 
     async def on_ready(self):
         print(f"logged in as {self.user} ({self.user.id})", flush=True)
