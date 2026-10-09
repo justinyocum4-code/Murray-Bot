@@ -95,7 +95,7 @@ class Listener:
             return False
         if self.running:
             return True
-        self.sink = voice_recv.BasicSink()
+        self.sink = voice_recv.BasicSink(event=asyncio.Event())
         try:
             self.vc.listen(self.sink)
         except Exception as e:  # noqa: BLE001
