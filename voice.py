@@ -1,13 +1,27 @@
 """Free TTS for Murray using Microsoft Edge voices (no API key needed)."""
 import io
 
-# Gruff older male voice. Other options: en-US-DavisNeural, en-US-TonyNeural.
-VOICE = "en-US-GuyNeural"
+# Older male voice, aged up with SSML: lower pitch + slower rate.
+VOICE = "en-US-DavisNeural"
+PITCH = "-25%"   # deeper = older
+RATE = "-8%"     # slower = older
+
+
+def _ssml(text):
+    # Escape XML special chars.
+    t = (text.replace("&", "&amp;").replace("<", "&lt;")
+         .replace(">", "&gt;"))
+    return (
+        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        f'xml:lang="en-US"><voice name="{VOICE}">'
+        f'<prosody pitch="{PITCH}" rate="{RATE}">{t}</prosody>'
+        f"</voice></speak>"
+    )
 
 
 async def text_to_speech(voice_id, text):
     """Turn text into MP3 bytes. Returns bytes/None. voice_id is ignored
-    (kept for compatibility) — uses the built-in gruff voice."""
+    (kept for compatibility) — uses the aged-up built-in voice."""
     if not (text or "").strip():
         return None
     try:
@@ -16,7 +30,7 @@ async def text_to_speech(voice_id, text):
         print("edge_tts not installed", flush=True)
         return None
     try:
-        communicate = edge_tts.Communicate(text[:500], VOICE)
+        communicate = edge_tts.Communicate(_ssml(text[:500]), VOICE)
         buf = io.BytesIO()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
