@@ -1,90 +1,37 @@
-"""ElevenLabs voice cloning + TTS for Murray."""
-import os
+"""Free TTS for Murray using Microsoft Edge voices (no API key needed)."""
+import io
 
-import aiohttp
-
-API = "https://api.elevenlabs.io/v1"
-
-
-def _key():
-    return os.environ.get("ELEVENLABS_API_KEY", "")
-
-
-async def create_cloned_voice(name, audio_bytes, filename="voice.mp3"):
-    """Upload a clip and create an instant-cloned voice. Returns voice_id."""
-    key = _key()
-    if not key or not audio_bytes:
-        return None
-    try:
-        form = aiohttp.FormData()
-        form.add_field("name", name)
-        form.add_field("files", audio_bytes,
-                       filename=filename, content_type="audio/mpeg")
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                f"{API}/voices/add",
-                headers={"xi-api-key": key},
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as r:
-                if r.status != 200:
-                    try:
-                        detail = (await r.text())[:500]
-                    except Exception:  # noqa: BLE001
-                        detail = "?"
-                    print(f"voice clone failed: {r.status} {detail}",
-                          flush=True)
-                    return None
-                data = await r.json()
-                return data.get("voice_id")
-    except Exception as e:  # noqa: BLE001
-        print(f"voice clone error: {e}", flush=True)
-        return None
+# Gruff older male voice. Other options: en-US-DavisNeural, en-US-TonyNeural.
+VOICE = "en-US-GuyNeural"
 
 
 async def text_to_speech(voice_id, text):
-    """Turn text into MP3 bytes using the cloned voice. Returns bytes/None."""
-    key = _key()
-    if not key or not voice_id or not (text or "").strip():
+    """Turn text into MP3 bytes. Returns bytes/None. voice_id is ignored
+    (kept for compatibility) — uses the built-in gruff voice."""
+    if not (text or "").strip():
         return None
-    # ElevenLabs free tier: keep it short.
-    text = text[:500]
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                f"{API}/text-to-speech/{voice_id}",
-                headers={"xi-api-key": key,
-                         "Content-Type": "application/json"},
-                json={"text": text,
-                      "model_id": "eleven_multilingual_v2"},
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as r:
-                if r.status != 200:
-                    print(f"tts failed: {r.status}", flush=True)
-                    return None
-                return await r.read()
-    except Exception as e:  # noqa: BLE001
-        print(f"tts error: {e}", flush=True)
+        import edge_tts
+    except ImportError:
+        print("edge_tts not installed", flush=True)
         return None
+    try:
+        communicate = edge_tts.Communicate(text[:500], VOICE)
+        buf = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        data = buf.getvalue()
+        return data if data else None
+    except Exception as e:  # noqa: BLE001
+        print(f"edge tts failed: {e}", flush=True)
+        return None
+
+
+# Stubs kept for compatibility — ElevenLabs is gone.
+async def create_cloned_voice(name, audio_bytes, filename="voice.mp3"):
+    return None
 
 
 async def list_voices():
-    """Return the account's available voices. Logs name/age/gender for picking."""
-    key = _key()
-    if not key:
-        return []
-    try:
-        async with aiohttp.ClientSession() as s_:
-            async with s_.get(
-                f"{API}/voices",
-                headers={"xi-api-key": key},
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as r:
-                if r.status != 200:
-                    print(f"voice list failed: {r.status}", flush=True)
-                    return []
-                data = await r.json()
-                return data.get("voices", [])
-    except Exception as e:  # noqa: BLE001
-        print(f"voice list error: {e}", flush=True)
-        return []
+    return []

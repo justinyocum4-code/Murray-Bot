@@ -273,14 +273,12 @@ class MurrayBot(commands.Bot):
                     f"[voice note transcript: {text}]")
                 if reply:
                     # Murray answers voice notes with a voice message.
-                    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "")
                     audio_bytes = None
-                    if voice_id:
-                        try:
-                            audio_bytes = await voice_mod.text_to_speech(
-                                voice_id, reply[:500])
-                        except Exception:
-                            audio_bytes = None
+                    try:
+                        audio_bytes = await voice_mod.text_to_speech(
+                            "", reply[:500])
+                    except Exception:
+                        audio_bytes = None
                     files = []
                     if audio_bytes:
                         files.append(discord.File(
@@ -350,13 +348,12 @@ FFMPEG = "./ffmpeg" if os.path.exists("./ffmpeg") else "ffmpeg"
 
 async def _speak_in_voice(guild, text):
     """If the bot is in a voice channel in this guild, speak text there."""
-    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "")
-    if not voice_id or not (text or "").strip():
+    if not (text or "").strip():
         return
     vc = guild.voice_client
     if vc is None or not vc.is_connected():
         return
-    audio = await voice_mod.text_to_speech(voice_id, text)
+    audio = await voice_mod.text_to_speech("", text)
     if not audio:
         return
     tmp = "/tmp/murray_reply.mp3"

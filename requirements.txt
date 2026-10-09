@@ -2,3 +2,4 @@ discord.py>=2.3
 aiohttp>=3.9
 PyNaCl>=1.5
 discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv
+edge-tts>=6.1
