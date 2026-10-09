@@ -18,10 +18,8 @@ except ImportError:
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-# Simple energy-based voice activity detection, tuned for Discord PCM.
 SILENCE_TIMEOUT = 1.6   # seconds of quiet = end of utterance
 MIN_SPEECH = 0.8        # ignore blips shorter than this
-POLL = 0.2              # sink poll interval
 ENERGY_THRESH = 900     # RMS-ish threshold for 16-bit PCM
 
 
@@ -75,19 +73,35 @@ async def transcribe(wav_bytes):
 
 
 class Listener:
-    """Attaches to a voice client, transcribes utterances, calls back."""
+    """Callback-based listener: audio packets arrive via BasicSink callback,
+    get queued, and an async loop does VAD + transcription."""
 
     def __init__(self, bot, voice_client, on_utterance):
         self.bot = bot
         self.vc = voice_client
-        self.on_utterance = on_utterance  # async fn(user_id, text)
+        self.on_utterance = on_utterance  # async fn(text)
         self.sink = None
         self.task = None
         self.running = False
-        self._speaking = False      # someone currently talking
+        self.queue = None
+        self._speaking = False
         self._speech_start = 0
         self._last_voice = 0
         self._buf = bytearray()
+
+    def _on_packet(self, user, voice_data):
+        # Runs in the voice thread — just enqueue, don't block.
+        if not self.running or self.queue is None:
+            return
+        if self.bot.user and user is not None and user.id == self.bot.user.id:
+            return
+        pcm = getattr(voice_data, "pcm", b"") or b""
+        if not pcm:
+            return
+        try:
+            self.queue.put_nowait(pcm)
+        except asyncio.QueueFull:
+            pass
 
     def start(self):
         if not HAVE_VOICE_RECV:
@@ -95,16 +109,37 @@ class Listener:
             return False
         if self.running:
             return True
-        self.sink = voice_recv.BasicSink(event=asyncio.Event())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        self.queue = asyncio.Queue(maxsize=400)
+        # Wrap the sync callback so it can feed the async queue.
+        def cb(user, voice_data, _loop=loop):
+            pcm = getattr(voice_data, "pcm", b"") or b""
+            if not pcm or not self.running:
+                return
+            if (self.bot.user and user is not None
+                    and user.id == self.bot.user.id):
+                return
+            _loop.call_soon_threadsafe(self._feed, pcm)
+        self.sink = voice_recv.BasicSink(event=cb)
         try:
             self.vc.listen(self.sink)
         except Exception as e:  # noqa: BLE001
             print(f"listen failed: {e}", flush=True)
             return False
         self.running = True
-        self.task = asyncio.create_task(self._loop())
+        self.task = loop.create_task(self._loop())
         print("Murray is listening…", flush=True)
         return True
+
+    def _feed(self, pcm):
+        if self.queue is not None:
+            try:
+                self.queue.put_nowait(pcm)
+            except asyncio.QueueFull:
+                pass
 
     def stop(self):
         self.running = False
@@ -117,39 +152,26 @@ class Listener:
         except Exception:  # noqa: BLE001
             pass
         self.sink = None
+        self.queue = None
 
     async def _loop(self):
         try:
             while self.running:
-                await asyncio.sleep(POLL)
-                # Don't listen to ourselves.
+                # Don't process our own voice.
                 if self.vc.is_playing():
+                    self._drain()
                     self._reset()
-                    # Drain the sink so our own voice doesn't queue up.
-                    if self.sink:
-                        for u in list(self.sink.audio_data.keys()):
-                            self.sink.audio_data.pop(u, None)
+                    await asyncio.sleep(0.3)
                     continue
-                if not self.sink:
+                try:
+                    pcm = await asyncio.wait_for(self.queue.get(), timeout=0.3)
+                except asyncio.TimeoutError:
+                    # Check for end-of-utterance on silence.
+                    if (self._speaking and time.time() - self._last_voice
+                            > SILENCE_TIMEOUT):
+                        await self._finish_utterance()
                     continue
-                # Merge all users' fresh audio.
-                chunk = bytearray()
-                for user_id in list(self.sink.audio_data.keys()):
-                    ad = self.sink.audio_data.pop(user_id, None)
-                    if ad is None:
-                        continue
-                    # Skip the bot itself.
-                    if self.bot.user and user_id == self.bot.user.id:
-                        continue
-                    try:
-                        raw = ad.file.getvalue()
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if raw:
-                        chunk += raw
-                # Downmix stereo->mono for energy check (take every 4th byte
-                # pair = left channel).
-                energy = _rms(bytes(chunk))
+                energy = _rms(pcm)
                 now = time.time()
                 if energy > ENERGY_THRESH:
                     if not self._speaking:
@@ -157,21 +179,23 @@ class Listener:
                         self._speech_start = now
                         self._buf = bytearray()
                     self._last_voice = now
-                    self._buf += chunk
+                    self._buf += pcm
                 elif self._speaking:
-                    # Still collect a little trailing audio.
-                    self._buf += chunk
+                    self._buf += pcm
                     if now - self._last_voice > SILENCE_TIMEOUT:
-                        dur = self._last_voice - self._speech_start
-                        pcm = bytes(self._buf)
-                        speaker = "someone"
-                        self._reset()
-                        if dur >= MIN_SPEECH and len(pcm) > 8000:
-                            await self._handle(pcm)
+                        await self._finish_utterance()
         except asyncio.CancelledError:
             pass
         except Exception as e:  # noqa: BLE001
             print(f"listener loop error: {e}", flush=True)
+
+    def _drain(self):
+        if self.queue is not None:
+            while not self.queue.empty():
+                try:
+                    self.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     def _reset(self):
         self._speaking = False
@@ -179,12 +203,16 @@ class Listener:
         self._last_voice = 0
         self._speech_start = 0
 
-    async def _handle(self, pcm):
+    async def _finish_utterance(self):
+        dur = self._last_voice - self._speech_start
+        pcm = bytes(self._buf)
+        self._reset()
+        if dur < MIN_SPEECH or len(pcm) < 8000:
+            return
         wav = _pcm_to_wav(pcm)
         text = await transcribe(wav)
         if not text or len(text) < 3:
             return
-        # Ignore obvious non-speech artifacts.
         low = text.lower().strip()
         if low in ("you", "thank you", ".", "...", "bye"):
             return
