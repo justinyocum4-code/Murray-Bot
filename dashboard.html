@@ -57,6 +57,9 @@ placeholder="e.g. calls people kid once in a blue moon">
 <label for="f-never">Never says / avoids</label>
 <input type="text" id="f-never" style="width:100%"
 placeholder="e.g. repeating the same band every reply">
+<label for="f-banned">Banned phrases (comma separated — stripped from every reply, enforced by code)</label>
+<input type="text" id="f-banned" style="width:100%"
+placeholder="e.g. kid, listen here, back in my day">
 <label for="f-dialogue">Example dialogue (shows the AI how to speak)</label>
 <textarea id="f-dialogue" style="min-height:6em"
 placeholder="You: …&#10;Character: …"></textarea>
@@ -141,6 +144,7 @@ function edit(id){
   $("f-speech").value=c.speech_style||"";
   $("f-quirks").value=c.quirks||"";
   $("f-never").value=c.never_says||"";
+  $("f-banned").value=c.banned_phrases||"";
   $("f-dialogue").value=c.example_dialogue||"";
   $("f-scenario").value=c.scenario||"";
   $("f-tags").value=c.tags||"";
@@ -183,6 +187,7 @@ $("form").onsubmit=async e=>{
     speech_style:$("f-speech").value.trim(),
     quirks:$("f-quirks").value.trim(),
     never_says:$("f-never").value.trim(),
+    banned_phrases:$("f-banned").value.trim(),
     example_dialogue:$("f-dialogue").value.trim(),
     scenario:$("f-scenario").value.trim(),
     tags:$("f-tags").value.trim(),

@@ -261,7 +261,10 @@ class MurrayBot(commands.Bot):
                   if char else characters.build_system_prompt(
                       characters.MURRAY_SEED))
         display = (char or {}).get("name") or name
-        return await ai_chat(system, f"{display} talking to {name}: {text}")
+        reply = await ai_chat(system, f"{display} talking to {name}: {text}")
+        if reply and char:
+            reply = characters.apply_banned_phrases(reply, char)
+        return reply
 
     async def _handle_voice_note(self, message, attachment):
         """Download a voice note, transcribe with Whisper, reply as Murray."""

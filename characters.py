@@ -62,7 +62,8 @@ async def save_character(data, char_id=None):
     allowed = ("name", "avatar_url", "tagline", "greeting", "personality",
                "example_dialogue", "scenario", "tags", "visibility",
                "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
-               "text_channel_id", "speech_style", "quirks", "never_says")
+               "text_channel_id", "speech_style", "quirks", "never_says",
+               "banned_phrases")
     payload = {k: data.get(k) for k in allowed if k in data}
     # If this one is being activated, deactivate the others first.
     try:
@@ -165,6 +166,8 @@ def build_system_prompt(char):
         parts.append(f"Quirks (use sparingly, not every reply): {char['quirks']}")
     if char.get("never_says"):
         parts.append(f"NEVER do this: {char['never_says']}")
+    if char.get("banned_phrases"):
+        parts.append(f"NEVER use these words or phrases: {char['banned_phrases']}")
     if char.get("scenario"):
         parts.append(f"Scenario: {char['scenario']}")
     if char.get("example_dialogue"):
@@ -178,3 +181,33 @@ def build_system_prompt(char):
         "- Never claim to be a real person."
     )
     return "\n".join(parts)
+
+
+def apply_banned_phrases(text, char):
+    """Strip banned phrases from a reply (code-enforced, not just prompted).
+
+    Returns the cleaned text. If cleaning would leave nothing meaningful,
+    returns the original text unchanged.
+    """
+    import re
+    if not text or not char:
+        return text
+    banned = char.get("banned_phrases") or ""
+    phrases = [p.strip() for p in banned.replace("\n", ",").split(",")
+               if p.strip()]
+    if not phrases:
+        return text
+    cleaned = text
+    for phrase in phrases:
+        cleaned = re.sub(re.escape(phrase), "", cleaned,
+                         flags=re.IGNORECASE)
+    # Tidy up leftover whitespace and stray punctuation.
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
+    cleaned = re.sub(r"([,.!?;:]){2,}", r"\1", cleaned)
+    cleaned = re.sub(r"^[,.!?;:\s]+", "", cleaned).strip()
+    cleaned = cleaned[0].upper() + cleaned[1:] if cleaned else cleaned
+    # Don't return an empty husk — fall back to the original.
+    if len(cleaned) < 3:
+        return text
+    return cleaned
