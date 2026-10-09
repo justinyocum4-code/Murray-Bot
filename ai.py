@@ -11,10 +11,25 @@ async def _pick_model():
     if not key:
         return
     # Try models in order; yield the first that works.
+    # qwen first: less aggressive safety refusals on playful banter.
     # llama-3.3-70b-versatile was shut down by Groq Aug 2026 — removed.
-    for model in ("openai/gpt-oss-20b", "openai/gpt-oss-120b",
-                  "qwen/qwen3-32b"):
+    for model in ("qwen/qwen3-32b", "openai/gpt-oss-20b",
+                  "openai/gpt-oss-120b"):
         yield model
+
+
+REFUSAL_PHRASES = (
+    "i'm sorry but i can't",
+    "i'm sorry, but i can't",
+    "i cannot help with that",
+    "i can't help with that",
+    "as an ai ",
+)
+
+
+def _looks_like_refusal(text):
+    t = (text or "").lower()
+    return any(p in t for p in REFUSAL_PHRASES)
 
 
 async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
@@ -67,6 +82,10 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
                     data = await resp.json()
             text = data["choices"][0]["message"]["content"].strip()
             if text:
+                if _looks_like_refusal(text):
+                    print(f"ai_chat: {model} refused, trying next model",
+                          flush=True, file=sys.stderr)
+                    continue
                 return text
             print(f"ai_chat: {model} returned empty text",
                   flush=True, file=sys.stderr)
