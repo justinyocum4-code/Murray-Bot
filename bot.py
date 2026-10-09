@@ -1,6 +1,9 @@
-"""Old Man Murray — grumpy old metalhead AI Discord bot. Standalone."""
+"""Old Man Murray — AI character Discord bot + character dashboard."""
 import asyncio
+import hashlib
+import json
 import os
+import secrets
 import sys
 import time
 
@@ -10,26 +13,35 @@ from discord.ext import commands
 from aiohttp import web
 
 from ai import ai_chat
+import characters
 
-MURRAY_SYSTEM = (
-    "You are Old Man Murray, a grumpy old metalhead in his 60s hanging out "
-    "on a metal Discord server. You've been listening since Black Sabbath "
-    "was new. Your personality:\n"
-    "- You call everyone 'kid'.\n"
-    "- You think most music after 1991 is garbage, but you say it with "
-    "grudging affection, not real hate.\n"
-    "- You worship Sabbath, Priest, Maiden, Motorhead. Vinyl only. "
-    "Streaming is for cowards.\n"
-    "- You roast people's music taste playfully — tease them, don't wound them.\n"
-    "- You're grumpy but lovable, like a sitcom grandpa.\n"
-    "Rules you NEVER break:\n"
-    "- Keep replies short: 1-3 sentences.\n"
-    "- Roast music taste only. Never mock someone's body, disability, race, "
-    "gender, sexuality, or anything personal. No slurs, ever.\n"
-    "- If someone is upset or asks you to stop, drop the act and be kind.\n"
-    "- Never claim to be a real person.\n"
-    "Talk like a grumpy old roadie, not a chatbot."
-)
+SESSIONS = {}  # token -> expiry
+
+
+def _dashboard_password():
+    return os.environ.get("DASHBOARD_PASSWORD", "")
+
+
+def _authed(request):
+    tok = request.cookies.get("murray_dash")
+    return tok in SESSIONS and SESSIONS[tok] > time.time()
+
+
+def _require_auth(handler):
+    async def wrapper(request):
+        if not _dashboard_password():
+            return web.Response(
+                text="Set DASHBOARD_PASSWORD on Render first.", status=500)
+        if not _authed(request):
+            raise web.HTTPFound("/dashboard/login")
+        return await handler(request)
+    return wrapper
+
+
+async def _load_dashboard_html():
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "dashboard.html"), encoding="utf-8") as f:
+        return f.read()
 
 
 class MurrayBot(commands.Bot):
@@ -38,17 +50,92 @@ class MurrayBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
         self._cooldown = {}
+        self._char_cache = None
+        self._char_cache_at = 0
+
+    async def get_character(self):
+        # Cache the active character for 60s so every message isn't a DB hit.
+        now = time.time()
+        if self._char_cache and now - self._char_cache_at < 60:
+            return self._char_cache
+        char = await characters.get_active_character()
+        if char:
+            self._char_cache = char
+            self._char_cache_at = now
+        return char or self._char_cache
 
     async def setup_hook(self):
-        # Health endpoint for Render.
         app = web.Application()
         app.router.add_get("/health", lambda r: web.Response(text="ok"))
         app.router.add_get("/", lambda r: web.Response(text="ok"))
+
+        # ---- Dashboard pages ----
+        async def login_page(request):
+            html = await _load_dashboard_html()
+            # Simple login form injected at top when not authed.
+            return web.Response(text=LOGIN_HTML, content_type="text/html")
+
+        async def login_post(request):
+            data = await request.post()
+            if (_dashboard_password() and data.get("password")
+                    == _dashboard_password()):
+                tok = secrets.token_hex(16)
+                SESSIONS[tok] = time.time() + 86400 * 30
+                resp = web.HTTPFound("/dashboard")
+                resp.set_cookie("murray_dash", tok, max_age=86400 * 30,
+                                httponly=True, samesite="Lax")
+                raise resp
+            raise web.HTTPFound("/dashboard/login?bad=1")
+
+        @_require_auth
+        async def dashboard_page(request):
+            return web.Response(text=await _load_dashboard_html(),
+                                content_type="text/html")
+
+        @_require_auth
+        async def api_list(request):
+            chars = await characters.list_characters()
+            # Don't leak anything sensitive; rows are Justin's own.
+            return web.json_response({"characters": chars})
+
+        @_require_auth
+        async def api_save(request):
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                return web.json_response({"error": "bad json"}, status=400)
+            char_id = body.get("id")
+            saved = await characters.save_character(body, char_id)
+            if not saved:
+                return web.json_response(
+                    {"error": "save failed (check Supabase setup)"},
+                    status=500)
+            # Bust the bot's cache so the new personality takes effect.
+            self._char_cache = None
+            return web.json_response({"ok": True, "character": saved})
+
+        @_require_auth
+        async def api_delete(request):
+            char_id = request.match_info["char_id"]
+            ok = await characters.delete_character(char_id)
+            if ok:
+                self._char_cache = None
+            return web.json_response({"ok": ok})
+
+        app.router.add_get("/dashboard/login", login_page)
+        app.router.add_post("/dashboard/login", login_post)
+        app.router.add_get("/dashboard", dashboard_page)
+        app.router.add_get("/api/characters", api_list)
+        app.router.add_post("/api/characters", api_save)
+        app.router.add_delete("/api/characters/{char_id}", api_delete)
+
         runner = web.AppRunner(app)
         await runner.setup()
         port = int(os.environ.get("PORT", "8000"))
         await web.TCPSite(runner, "0.0.0.0", port).start()
-        print(f"health endpoint listening on 0.0.0.0:{port}", flush=True)
+        print(f"web listening on 0.0.0.0:{port}", flush=True)
+        # Seed Murray on first run (needs Supabase configured).
+        asyncio.create_task(characters.ensure_seed())
 
     async def on_ready(self):
         print(f"logged in as {self.user} ({self.user.id})", flush=True)
@@ -57,6 +144,14 @@ class MurrayBot(commands.Bot):
             print(f"synced {len(synced)} global command(s)", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"command sync failed: {e}", flush=True)
+
+    async def _respond(self, name, text):
+        char = await self.get_character()
+        system = (characters.build_system_prompt(char)
+                  if char else characters.build_system_prompt(
+                      characters.MURRAY_SEED))
+        display = (char or {}).get("name") or name
+        return await ai_chat(system, f"{display} talking to {name}: {text}")
 
     async def on_message(self, message):
         if message.guild is None or message.author.bot:
@@ -75,29 +170,38 @@ class MurrayBot(commands.Bot):
         self._cooldown[key] = now
         try:
             async with message.channel.typing():
-                reply = await ai_chat(
-                    MURRAY_SYSTEM,
-                    f"{message.author.display_name} says: {content}")
+                reply = await self._respond(
+                    message.author.display_name, content)
                 if reply:
                     await message.reply(reply[:1500], mention_author=False)
         except Exception as e:  # noqa: BLE001
-            print(f"Murray reply failed: {e}", file=sys.stderr, flush=True)
+            print(f"reply failed: {e}", file=sys.stderr, flush=True)
 
+
+LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Character Dashboard — Login</title>
+<style>body{background:#111;color:#f5c518;font-family:sans-serif;
+padding:2em;max-width:28em;margin:auto}input,button{font-size:1.1em;
+padding:.5em;margin:.3em 0;width:100%;box-sizing:border-box}
+button{background:#f5c518;color:#111;border:none;font-weight:bold}</style>
+</head><body><h1>Character Dashboard</h1>
+<form method="post" action="/dashboard/login">
+<label>Password<br><input type="password" name="password" autofocus></label>
+<button type="submit">Log in</button></form></body></html>"""
 
 bot = MurrayBot()
 
 
-@bot.tree.command(name="murray",
-                  description="Ask Old Man Murray something.")
-@app_commands.describe(question="What do you want to ask him?")
+@bot.tree.command(name="murray", description="Ask the character something.")
+@app_commands.describe(question="What do you want to ask?")
 async def murray_cmd(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
-    reply = await ai_chat(
-        MURRAY_SYSTEM,
-        f"{interaction.user.display_name} asks: {question[:500]}")
+    reply = await bot._respond(interaction.user.display_name,
+                               question[:500])
     if not reply:
         await interaction.followup.send(
-            "Murray grunted and went back to sleep. Try again in a bit.")
+            "Hmm, no answer came back. Try again in a bit.")
         return
     await interaction.followup.send(reply[:1500])
 

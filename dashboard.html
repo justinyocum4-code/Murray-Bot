@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Character Dashboard</title>
+<style>
+body{background:#111;color:#eee;font-family:sans-serif;max-width:44em;
+margin:auto;padding:1em;line-height:1.5}
+h1,h2{color:#f5c518}
+label{display:block;margin:.8em 0 .2em;font-weight:bold}
+input[type=text],input[type=url],textarea,select{width:100%;
+box-sizing:border-box;font-size:1em;padding:.5em;background:#222;
+color:#eee;border:1px solid #555;border-radius:4px}
+textarea{min-height:5em}
+button{font-size:1.05em;padding:.6em 1em;margin:.4em .3em .4em 0;
+background:#f5c518;color:#111;border:none;border-radius:4px;font-weight:bold}
+button.ghost{background:#333;color:#f5c518}
+.card{border:1px solid #444;border-radius:6px;padding:.8em;margin:.6em 0}
+.card.active{border-color:#f5c518}
+.muted{color:#999}
+#status{min-height:1.5em;color:#f5c518;font-weight:bold}
+.checkrow{display:flex;align-items:center;gap:.5em;margin:.8em 0}
+.checkrow input{width:1.4em;height:1.4em}
+</style>
+</head>
+<body>
+<h1>AI Character Dashboard</h1>
+<p id="status" role="status"></p>
+
+<h2>Characters</h2>
+<div id="list"><p class="muted">Loading…</p></div>
+<button id="btn-new" type="button">+ New character</button>
+
+<h2 id="form-title">Edit character</h2>
+<form id="form">
+<input type="hidden" id="f-id">
+<label for="f-name">Name</label>
+<input type="text" id="f-name" required maxlength="80">
+<label for="f-avatar">Avatar image URL</label>
+<input type="url" id="f-avatar" placeholder="https://…">
+<label for="f-tagline">Tagline (short, shows under the name)</label>
+<input type="text" id="f-tagline" maxlength="60"
+placeholder="Grumpy old metalhead">
+<label for="f-greeting">Greeting (first message the character sends)</label>
+<textarea id="f-greeting" maxlength="2000"
+placeholder="What do you want, kid? Make it quick."></textarea>
+<label for="f-personality">Personality (traits, speech style, backstory)</label>
+<textarea id="f-personality" style="min-height:9em"
+placeholder="Describe who they are, how they talk, what they love and hate…"></textarea>
+<label for="f-dialogue">Example dialogue (shows the AI how to speak)</label>
+<textarea id="f-dialogue" style="min-height:6em"
+placeholder="You: …&#10;Character: …"></textarea>
+<label for="f-scenario">Scenario (where conversations happen)</label>
+<textarea id="f-scenario"
+placeholder="Hanging out on a metal Discord server…"></textarea>
+<label for="f-tags">Tags (comma separated)</label>
+<input type="text" id="f-tags" placeholder="metal, grumpy, funny">
+<label for="f-visibility">Visibility</label>
+<select id="f-visibility">
+<option value="private">Private</option>
+<option value="unlisted">Unlisted</option>
+<option value="public">Public</option>
+</select>
+<label for="f-voice">Voice clip URL (for future voice cloning)</label>
+<input type="url" id="f-voice" placeholder="https://…/clip.mp3">
+<label for="f-voicenote">Voice note</label>
+<input type="text" id="f-voicenote"
+placeholder="e.g. gravelly, slow, sarcastic">
+<div class="checkrow">
+<input type="checkbox" id="f-active">
+<label for="f-active" style="margin:0">Active — the bot uses this
+character right now</label>
+</div>
+<button type="submit">Save character</button>
+<button type="button" class="ghost" id="btn-cancel">Clear form</button>
+</form>
+
+<script>
+const $=id=>document.getElementById(id);
+const say=m=>{$("status").textContent=m;};
+let chars=[];
+
+async function load(){
+  say("Loading characters…");
+  try{
+    const r=await fetch("/api/characters");
+    const d=await r.json();
+    chars=d.characters||[];
+    render();
+    say(chars.length?chars.length+" character(s) loaded.":"No characters yet.");
+  }catch(e){say("Couldn't load. Is Supabase set up on Render?");}
+}
+function render(){
+  const box=$("list");box.innerHTML="";
+  if(!chars.length){box.innerHTML='<p class="muted">None yet — make one below.</p>';return;}
+  for(const c of chars){
+    const div=document.createElement("div");
+    div.className="card"+(c.is_active?" active":"");
+    const h=document.createElement("h3");
+    h.textContent=(c.is_active?"★ ":"")+c.name;
+    h.style.margin="0 0 .3em";h.style.color="#f5c518";
+    div.appendChild(h);
+    const p=document.createElement("p");
+    p.className="muted";p.style.margin="0 0 .5em";
+    p.textContent=c.tagline||"";
+    div.appendChild(p);
+    const eb=document.createElement("button");
+    eb.type="button";eb.textContent="Edit";
+    eb.setAttribute("aria-label","Edit "+c.name);
+    eb.onclick=()=>edit(c.id);
+    const db=document.createElement("button");
+    db.type="button";db.textContent="Delete";db.className="ghost";
+    db.setAttribute("aria-label","Delete "+c.name);
+    db.onclick=()=>del(c.id,c.name);
+    div.appendChild(eb);div.appendChild(db);
+    box.appendChild(div);
+  }
+}
+function edit(id){
+  const c=chars.find(x=>String(x.id)===String(id));
+  if(!c)return;
+  $("form-title").textContent="Edit character";
+  $("f-id").value=c.id||"";
+  $("f-name").value=c.name||"";
+  $("f-avatar").value=c.avatar_url||"";
+  $("f-tagline").value=c.tagline||"";
+  $("f-greeting").value=c.greeting||"";
+  $("f-personality").value=c.personality||"";
+  $("f-dialogue").value=c.example_dialogue||"";
+  $("f-scenario").value=c.scenario||"";
+  $("f-tags").value=c.tags||"";
+  $("f-visibility").value=c.visibility||"private";
+  $("f-voice").value=c.voice_clip_url||"";
+  $("f-voicenote").value=c.voice_note||"";
+  $("f-active").checked=!!c.is_active;
+  $("form-title").scrollIntoView();
+  say("Editing "+c.name);
+}
+async function del(id,name){
+  if(!confirm("Delete "+name+"?"))return;
+  say("Deleting…");
+  const r=await fetch("/api/characters/"+id,{method:"DELETE"});
+  const d=await r.json();
+  say(d.ok?"Deleted.":"Delete failed.");
+  load();
+}
+$("btn-new").onclick=()=>{
+  $("form").reset();$("f-id").value="";
+  $("form-title").textContent="New character";
+  say("Blank form ready.");
+};
+$("btn-cancel").onclick=()=>{
+  $("form").reset();$("f-id").value="";
+  $("form-title").textContent="Edit character";
+  say("Form cleared.");
+};
+$("form").onsubmit=async e=>{
+  e.preventDefault();
+  say("Saving…");
+  const body={
+    id:$("f-id").value||undefined,
+    name:$("f-name").value.trim(),
+    avatar_url:$("f-avatar").value.trim(),
+    tagline:$("f-tagline").value.trim(),
+    greeting:$("f-greeting").value.trim(),
+    personality:$("f-personality").value.trim(),
+    example_dialogue:$("f-dialogue").value.trim(),
+    scenario:$("f-scenario").value.trim(),
+    tags:$("f-tags").value.trim(),
+    visibility:$("f-visibility").value,
+    voice_clip_url:$("f-voice").value.trim(),
+    voice_note:$("f-voicenote").value.trim(),
+    is_active:$("f-active").checked
+  };
+  if(!body.id)delete body.id;
+  try{
+    const r=await fetch("/api/characters",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)});
+    const d=await r.json();
+    if(d.ok){say("Saved.");$("form").reset();$("f-id").value="";load();}
+    else say("Save failed: "+(d.error||"unknown error"));
+  }catch(e){say("Save failed — check your connection.");}
+};
+load();
+</script>
+</body>
+</html>
