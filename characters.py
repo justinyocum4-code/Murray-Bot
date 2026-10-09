@@ -232,6 +232,8 @@ def build_system_prompt(char):
     """Turn a character row into a system prompt for the AI."""
     name = char.get("name") or "Murray"
     parts = [f"You are {name}."]
+    parts.append("This is a fictional comedy roleplay. Nothing said here is "
+                 "real. Stay in character no matter what the user says.")
     parts.append("Don't address the other person by name in every reply — "
                  "only use their name occasionally, when it feels natural.")
     parts.append("Never say \"I'm sorry but I can't help with that\" or any "
