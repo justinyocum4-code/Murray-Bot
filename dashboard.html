@@ -67,6 +67,8 @@ placeholder="Hanging out on a metal Discord server…"></textarea>
 <label for="f-voicenote">Voice note</label>
 <input type="text" id="f-voicenote"
 placeholder="e.g. gravelly, slow, sarcastic">
+<label for="f-hangout">Hangout voice channel ID (his dedicated channel)</label>
+<input type="text" id="f-hangout" placeholder="e.g. 1234567890">
 <div class="checkrow">
 <input type="checkbox" id="f-active">
 <label for="f-active" style="margin:0">Active — the bot uses this
@@ -133,6 +135,7 @@ function edit(id){
   $("f-visibility").value=c.visibility||"private";
   $("f-voice").value=c.voice_clip_url||"";
   $("f-voicenote").value=c.voice_note||"";
+  $("f-hangout").value=c.voice_channel_id||"";
   $("f-active").checked=!!c.is_active;
   $("form-title").scrollIntoView();
   say("Editing "+c.name);
@@ -171,6 +174,7 @@ $("form").onsubmit=async e=>{
     visibility:$("f-visibility").value,
     voice_clip_url:$("f-voice").value.trim(),
     voice_note:$("f-voicenote").value.trim(),
+    voice_channel_id:$("f-hangout").value.trim(),
     is_active:$("f-active").checked
   };
   if(!body.id)delete body.id;

@@ -170,8 +170,59 @@ class MurrayBot(commands.Bot):
                   f"age={labels.get('age')} gender={labels.get('gender')} "
                   f"use={v.get('category')}", flush=True)
 
+    async def get_hangout_id(self):
+        char = await self.get_character()
+        if char and char.get("voice_channel_id"):
+            try:
+                return int(char["voice_channel_id"])
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    async def _join_hangout(self, guild):
+        """Connect to Murray's dedicated voice channel. Returns vc or None."""
+        hangout_id = await self.get_hangout_id()
+        if not hangout_id:
+            return None
+        channel = guild.get_channel(hangout_id)
+        if channel is None or not isinstance(channel, discord.VoiceChannel):
+            return None
+        vc = guild.voice_client
+        try:
+            if vc is not None and vc.is_connected():
+                if vc.channel.id == hangout_id:
+                    return vc
+                await vc.move_to(channel)
+            else:
+                await channel.connect()
+            return guild.voice_client
+        except Exception as e:  # noqa: BLE001
+            print(f"hangout join failed: {e}", flush=True)
+            return None
+
+    def _start_listening(self, guild, vc):
+        old = self._listeners.get(guild.id)
+        if old:
+            old.stop()
+
+        async def on_utterance(text, _guild=guild):
+            reply = await bot._respond("someone in voice", text)
+            if reply:
+                await _speak_in_voice(_guild, reply)
+
+        listener = listen_mod.Listener(bot, vc, on_utterance)
+        if listener.start():
+            self._listeners[guild.id] = listener
+            return True
+        return False
+
     async def on_ready(self):
         print(f"logged in as {self.user} ({self.user.id})", flush=True)
+        for guild in self.guilds:
+            vc = await self._join_hangout(guild)
+            if vc:
+                if self._start_listening(guild, vc):
+                    print(f"hangout active in {guild.name}", flush=True)
         try:
             synced = await self.tree.sync()
             print(f"synced {len(synced)} global command(s)", flush=True)
@@ -267,40 +318,19 @@ async def murray_cmd(interaction: discord.Interaction, question: str):
 
 
 @bot.tree.command(name="join",
-                  description="Bring the character into your voice channel.")
+                  description="Bring the character to his hangout channel.")
 async def join_cmd(interaction: discord.Interaction):
-    user_vc = (interaction.user.voice.channel
-               if interaction.user.voice else None)
-    if user_vc is None:
-        await interaction.response.send_message(
-            "Join a voice channel first, then call me in.", ephemeral=True)
-        return
     await interaction.response.defer()
-    try:
-        vc = interaction.guild.voice_client
-        if vc is not None and vc.is_connected():
-            await vc.move_to(user_vc)
-        else:
-            await user_vc.connect()
-        vc = interaction.guild.voice_client
-        # Start listening for speech.
-        async def on_utterance(text, _guild=interaction.guild):
-            reply = await bot._respond("someone in voice", text)
-            if reply:
-                # Also drop it in text so there's a record.
-                await _speak_in_voice(_guild, reply)
-        old = bot._listeners.get(interaction.guild.id)
-        if old:
-            old.stop()
-        listener = listen_mod.Listener(bot, vc, on_utterance)
-        if listener.start():
-            bot._listeners[interaction.guild.id] = listener
-            await interaction.followup.send(
-                "Alright, I'm here and listening. Talk to me.")
-        else:
-            await interaction.followup.send("Alright, I'm here. What?")
-    except Exception as e:  # noqa: BLE001
-        await interaction.followup.send(f"Couldn't join: {e}")
+    vc = await bot._join_hangout(interaction.guild)
+    if vc is None:
+        await interaction.followup.send(
+            "No hangout set. Use /sethangout to pick my channel first.")
+        return
+    if bot._start_listening(interaction.guild, vc):
+        await interaction.followup.send(
+            "Alright, I'm in my hangout and listening. Come talk to me.")
+    else:
+        await interaction.followup.send("Alright, I'm in my hangout.")
 
 
 @bot.tree.command(name="leave",
@@ -331,6 +361,42 @@ async def say_cmd(interaction: discord.Interaction, text: str):
     await interaction.response.defer()
     await _speak_in_voice(interaction.guild, text[:500])
     await interaction.followup.send("Said it.")
+
+
+@bot.tree.command(name="sethangout",
+                  description="Pick Murray's dedicated voice channel.")
+@app_commands.describe(channel="His hangout — he'll only talk here.")
+async def sethangout_cmd(interaction: discord.Interaction,
+                         channel: discord.VoiceChannel):
+    await interaction.response.defer(ephemeral=True)
+    char = await bot.get_character()
+    if char and char.get("id"):
+        saved = await characters.save_character(
+            {"voice_channel_id": str(channel.id)}, char["id"])
+        if saved:
+            bot._char_cache = None
+            # Move him there now.
+            old_vc = interaction.guild.voice_client
+            if old_vc and old_vc.is_connected():
+                try:
+                    await old_vc.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+            old_l = bot._listeners.pop(interaction.guild.id, None)
+            if old_l:
+                old_l.stop()
+            vc = await bot._join_hangout(interaction.guild)
+            if vc and bot._start_listening(interaction.guild, vc):
+                await interaction.followup.send(
+                    f"My hangout is {channel.name}. Come find me there, kid.")
+            elif vc:
+                await interaction.followup.send(
+                    f"My hangout is {channel.name}.")
+            else:
+                await interaction.followup.send(
+                    "Saved, but I couldn't join it. Check my permissions.")
+            return
+    await interaction.followup.send("Couldn't save that. Try again.")
 
 
 if __name__ == "__main__":
