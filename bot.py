@@ -16,6 +16,11 @@ from ai import ai_chat
 import characters
 import voice as voice_mod
 import listen as listen_mod
+try:
+    from discord.ext import voice_recv
+    HAVE_VR = True
+except ImportError:
+    HAVE_VR = False
 
 SESSIONS = {}  # token -> expiry
 
@@ -194,7 +199,8 @@ class MurrayBot(commands.Bot):
                     return vc
                 await vc.move_to(channel)
             else:
-                await channel.connect()
+                cls = voice_recv.VoiceRecvClient if HAVE_VR else discord.VoiceClient
+                await channel.connect(cls=cls)
             return guild.voice_client
         except Exception as e:  # noqa: BLE001
             print(f"hangout join failed: {e}", flush=True)
