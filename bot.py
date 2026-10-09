@@ -14,6 +14,7 @@ from aiohttp import web
 
 from ai import ai_chat
 import characters
+import voice as voice_mod
 
 SESSIONS = {}  # token -> expiry
 
@@ -174,6 +175,7 @@ class MurrayBot(commands.Bot):
                     message.author.display_name, content)
                 if reply:
                     await message.reply(reply[:1500], mention_author=False)
+                    await _speak_in_voice(message.guild, reply)
         except Exception as e:  # noqa: BLE001
             print(f"reply failed: {e}", file=sys.stderr, flush=True)
 
@@ -190,6 +192,32 @@ button{background:#f5c518;color:#111;border:none;font-weight:bold}</style>
 <label>Password<br><input type="password" name="password" autofocus></label>
 <button type="submit">Log in</button></form></body></html>"""
 
+FFMPEG = "./ffmpeg" if os.path.exists("./ffmpeg") else "ffmpeg"
+
+
+async def _speak_in_voice(guild, text):
+    """If the bot is in a voice channel in this guild, speak text there."""
+    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "")
+    if not voice_id or not (text or "").strip():
+        return
+    vc = guild.voice_client
+    if vc is None or not vc.is_connected():
+        return
+    audio = await voice_mod.text_to_speech(voice_id, text)
+    if not audio:
+        return
+    tmp = "/tmp/murray_reply.mp3"
+    with open(tmp, "wb") as f:
+        f.write(audio)
+    # Wait for any current audio to finish, then play.
+    while vc.is_playing():
+        await asyncio.sleep(0.5)
+    try:
+        vc.play(discord.FFmpegPCMAudio(tmp, executable=FFMPEG))
+    except Exception as e:  # noqa: BLE001
+        print(f"voice play failed: {e}", flush=True)
+
+
 bot = MurrayBot()
 
 
@@ -204,6 +232,54 @@ async def murray_cmd(interaction: discord.Interaction, question: str):
             "Hmm, no answer came back. Try again in a bit.")
         return
     await interaction.followup.send(reply[:1500])
+
+
+@bot.tree.command(name="join",
+                  description="Bring the character into your voice channel.")
+async def join_cmd(interaction: discord.Interaction):
+    user_vc = (interaction.user.voice.channel
+               if interaction.user.voice else None)
+    if user_vc is None:
+        await interaction.response.send_message(
+            "Join a voice channel first, then call me in.", ephemeral=True)
+        return
+    await interaction.response.defer()
+    try:
+        vc = interaction.guild.voice_client
+        if vc is not None and vc.is_connected():
+            await vc.move_to(user_vc)
+        else:
+            await user_vc.connect()
+        await interaction.followup.send("Alright, I'm here. What?")
+    except Exception as e:  # noqa: BLE001
+        await interaction.followup.send(f"Couldn't join: {e}")
+
+
+@bot.tree.command(name="leave",
+                  description="Send the character out of voice.")
+async def leave_cmd(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc is None or not vc.is_connected():
+        await interaction.response.send_message(
+            "I'm not in voice.", ephemeral=True)
+        return
+    await vc.disconnect()
+    await interaction.response.send_message("Fine, I'm leaving.")
+
+
+@bot.tree.command(name="say",
+                  description="Make the character say something out loud.")
+@app_commands.describe(text="What should he say?")
+async def say_cmd(interaction: discord.Interaction, text: str):
+    vc = interaction.guild.voice_client
+    if vc is None or not vc.is_connected():
+        await interaction.response.send_message(
+            "Get me into a voice channel with /join first.",
+            ephemeral=True)
+        return
+    await interaction.response.defer()
+    await _speak_in_voice(interaction.guild, text[:500])
+    await interaction.followup.send("Said it.")
 
 
 if __name__ == "__main__":
