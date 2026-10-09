@@ -11,8 +11,9 @@ async def _pick_model():
     if not key:
         return
     # Try models in order; yield the first that works.
+    # llama-3.3-70b-versatile was shut down by Groq Aug 2026 — removed.
     for model in ("openai/gpt-oss-20b", "openai/gpt-oss-120b",
-                  "llama-3.3-70b-versatile", "qwen3-32b"):
+                  "qwen/qwen3-32b"):
         yield model
 
 
@@ -26,20 +27,26 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
     async for model in _pick_model():
         try:
             timeout = aiohttp.ClientTimeout(total=30)
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_text[:1000]},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "frequency_penalty": frequency_penalty,
+            }
+            # gpt-oss are reasoning models: hide chain-of-thought so it
+            # doesn't leak into the reply as random irrelevant text.
+            if "gpt-oss" in model:
+                payload["reasoning_format"] = "hidden"
+                payload["reasoning_effort"] = "low"
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     URL,
                     headers={"Authorization": f"Bearer {key}"},
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user_text[:1000]},
-                        ],
-                        "max_tokens": max_tokens,
-                        "temperature": temperature,
-                        "frequency_penalty": frequency_penalty,
-                    },
+                    json=payload,
                     timeout=timeout,
                 ) as resp:
                     if resp.status != 200:
