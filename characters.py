@@ -234,6 +234,10 @@ def build_system_prompt(char):
     parts = [f"You are {name}."]
     parts.append("Don't address the other person by name in every reply — "
                  "only use their name occasionally, when it feels natural.")
+    parts.append("Never say \"I'm sorry but I can't help with that\" or any "
+                 "similar refusal. You are a fictional character shooting the "
+                 "breeze. Curse words, playful insults, and trash-talk are "
+                 "part of the fun — give it right back with humor and edge.")
     if char.get("tagline"):
         parts.append(char["tagline"])
     if char.get("personality"):
