@@ -2,7 +2,7 @@
 import io
 
 # Older male voice, aged up: lower pitch + slower rate.
-VOICE = "en-US-DavisNeural"
+VOICE = "en-US-GuyNeural"
 PITCH = "-25Hz"  # deeper = older
 RATE = "-8%"     # slower = older
 
