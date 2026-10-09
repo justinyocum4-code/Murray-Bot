@@ -75,6 +75,7 @@ class MurrayBot(commands.Bot):
         self._char_cache = None
         self._char_cache_at = 0
         self._listeners = {}  # guild_id -> listen_mod.Listener
+        self._history = {}  # (guild_id, channel_id) -> [msg dicts]
 
     async def get_character(self):
         # Cache the active character for 60s so every message isn't a DB hit.
@@ -367,7 +368,8 @@ class MurrayBot(commands.Bot):
             old.stop()
 
         async def on_utterance(text, _guild=guild):
-            reply = await self._respond("someone in voice", text)
+            reply = await self._respond("someone in voice", text,
+                                        _guild.id, None)
             if reply:
                 await _speak_in_voice(_guild, reply)
 
@@ -390,7 +392,7 @@ class MurrayBot(commands.Bot):
         except Exception as e:  # noqa: BLE001
             print(f"command sync failed: {e}", flush=True)
 
-    async def _respond(self, name, text):
+    async def _respond(self, name, text, guild_id=None, channel_id=None):
         char = await self.get_character()
         system = (characters.build_system_prompt(char)
                   if char else characters.build_system_prompt(
@@ -403,15 +405,26 @@ class MurrayBot(commands.Bot):
             lore = await characters.get_relevant_lore(text, char["id"])
         if lore:
             system = system + f"\nRelevant background:\n{lore}"
+        # Recent conversation history so he stays on topic.
+        history = self._history.get((guild_id, channel_id), [])
         reply = await ai_chat(system, f"{display} talking to {name}: {text}",
                              max_tokens=max_tokens,
                              temperature=characters.get_temperature(char),
-                             frequency_penalty=characters.get_repetition_penalty(char))
+                             frequency_penalty=characters.get_repetition_penalty(char),
+                             history=history)
         if reply and char:
             reply = characters.apply_banned_phrases(reply, char)
         if not reply:
             # Never go silent — fall back to an in-character shrug.
             reply = "Bah, lost my train of thought there. Run that by me again."
+        # Remember this exchange for next time.
+        if guild_id is not None and channel_id is not None:
+            key = (guild_id, channel_id)
+            hist = self._history.setdefault(key, [])
+            hist.append({"role": "user",
+                         "content": f"{name}: {text[:500]}"})
+            hist.append({"role": "assistant", "content": reply[:500]})
+            self._history[key] = hist[-20:]
         return reply
 
     async def _handle_voice_note(self, message, attachment):
@@ -430,7 +443,9 @@ class MurrayBot(commands.Bot):
                     return
                 reply = await self._respond(
                     message.author.display_name,
-                    f"[voice note transcript: {text}]")
+                    f"[voice note transcript: {text}]",
+                    message.guild.id if message.guild else None,
+                    message.channel.id)
                 if reply:
                     # Murray answers voice notes with a voice message.
                     audio_bytes = None
@@ -486,7 +501,8 @@ class MurrayBot(commands.Bot):
         try:
             async with message.channel.typing():
                 reply = await self._respond(
-                    message.author.display_name, content)
+                    message.author.display_name, content,
+                    message.guild.id, message.channel.id)
                 if reply:
                     await message.reply(reply[:1500], mention_author=False)
                     await _speak_in_voice(message.guild, reply)
@@ -538,7 +554,9 @@ def register_commands(bot):
     async def murray_cmd(interaction: discord.Interaction, question: str):
         await interaction.response.defer()
         reply = await interaction.client._respond(interaction.user.display_name,
-                                   question[:500])
+                                   question[:500],
+                                   interaction.guild.id if interaction.guild else None,
+                                   interaction.channel.id if interaction.channel else None)
         if not reply:
             await interaction.followup.send(
                 "Hmm, no answer came back. Try again in a bit.")

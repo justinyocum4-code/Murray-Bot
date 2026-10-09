@@ -18,8 +18,10 @@ async def _pick_model():
 
 
 async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
-               frequency_penalty=0.5):
-    """Freeform character chat via Groq. Returns reply text or None."""
+               frequency_penalty=0.5, history=None):
+    """Freeform character chat via Groq. Returns reply text or None.
+    history: optional list of {"role": ..., "content": ...} dicts for context.
+    """
     import sys
     key = os.environ.get("GROQ_API_KEY")
     if not key or not (user_text or "").strip():
@@ -42,6 +44,13 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
             if "gpt-oss" in model:
                 payload["reasoning_format"] = "hidden"
                 payload["reasoning_effort"] = "low"
+            # Attach recent conversation history for context.
+            messages = [{"role": "system", "content": system}]
+            if history:
+                messages.extend(history[-12:])
+            messages.append({"role": "user",
+                             "content": user_text[:1000]})
+            payload["messages"] = messages
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     URL,
