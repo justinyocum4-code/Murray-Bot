@@ -285,7 +285,7 @@ class MurrayBot(commands.Bot):
                             io.BytesIO(audio_bytes),
                             filename="murray-voice-message.mp3"))
                     await message.reply(
-                        f'_heard: "{text[:200]}"_\n{reply[:1400]}',
+                        reply[:1500],
                         mention_author=False,
                         files=files if files else None)
                     await _speak_in_voice(message.guild, reply)
