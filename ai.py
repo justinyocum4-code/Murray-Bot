@@ -16,7 +16,7 @@ async def _pick_model():
         yield model
 
 
-async def ai_chat(system, user_text, max_tokens=300):
+async def ai_chat(system, user_text, max_tokens=300, temperature=0.7):
     """Freeform character chat via Groq. Returns reply text or None."""
     key = os.environ.get("GROQ_API_KEY")
     if not key or not (user_text or "").strip():
@@ -35,7 +35,7 @@ async def ai_chat(system, user_text, max_tokens=300):
                             {"role": "user", "content": user_text[:1000]},
                         ],
                         "max_tokens": max_tokens,
-                        "temperature": 0.9,
+                        "temperature": temperature,
                     },
                     timeout=timeout,
                 ) as resp:

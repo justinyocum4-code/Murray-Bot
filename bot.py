@@ -141,12 +141,37 @@ class MurrayBot(commands.Bot):
                 self._char_cache = None
             return web.json_response({"ok": ok})
 
+        @_require_auth
+        async def api_test_chat(request):
+            """Test a personality without saving: {character fields..., message}."""
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                return web.json_response({"error": "bad json"}, status=400)
+            message = (body.get("message") or "").strip()
+            if not message:
+                return web.json_response({"error": "empty message"}, status=400)
+            # Build a throwaway character dict from the form values.
+            char = {k: body.get(k, "") for k in (
+                "name", "tagline", "personality", "speech_style", "quirks",
+                "never_says", "banned_phrases", "banned_topics",
+                "reply_length", "character_memory", "scenario",
+                "example_dialogue")}
+            system = characters.build_system_prompt(char)
+            reply = await ai_chat(
+                system, f"{char.get('name') or 'Murray'} talking to Tester: {message}",
+                max_tokens=characters.get_max_tokens(char))
+            if reply:
+                reply = characters.apply_banned_phrases(reply, char)
+            return web.json_response({"ok": True, "reply": reply or ""})
+
         app.router.add_get("/dashboard/login", login_page)
         app.router.add_post("/dashboard/login", login_post)
         app.router.add_get("/dashboard", dashboard_page)
         app.router.add_get("/api/characters", api_list)
         app.router.add_post("/api/characters", api_save)
         app.router.add_delete("/api/characters/{char_id}", api_delete)
+        app.router.add_post("/api/test-chat", api_test_chat)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -261,7 +286,9 @@ class MurrayBot(commands.Bot):
                   if char else characters.build_system_prompt(
                       characters.MURRAY_SEED))
         display = (char or {}).get("name") or name
-        reply = await ai_chat(system, f"{display} talking to {name}: {text}")
+        max_tokens = characters.get_max_tokens(char)
+        reply = await ai_chat(system, f"{display} talking to {name}: {text}",
+                             max_tokens=max_tokens)
         if reply and char:
             reply = characters.apply_banned_phrases(reply, char)
         return reply

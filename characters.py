@@ -63,7 +63,8 @@ async def save_character(data, char_id=None):
                "example_dialogue", "scenario", "tags", "visibility",
                "is_active", "voice_clip_url", "voice_note", "voice_channel_id",
                "text_channel_id", "speech_style", "quirks", "never_says",
-               "banned_phrases")
+               "banned_phrases", "banned_topics", "reply_length",
+               "character_memory")
     payload = {k: data.get(k) for k in allowed if k in data}
     # If this one is being activated, deactivate the others first.
     try:
@@ -168,6 +169,19 @@ def build_system_prompt(char):
         parts.append(f"NEVER do this: {char['never_says']}")
     if char.get("banned_phrases"):
         parts.append(f"NEVER use these words or phrases: {char['banned_phrases']}")
+    if char.get("banned_topics"):
+        parts.append(
+            "Never bring up these topics on your own — only discuss them if "
+            f"the other person mentions them first: {char['banned_topics']}")
+    length = (char.get("reply_length") or "medium").lower()
+    if length == "short":
+        parts.append("Keep replies very short: 1 sentence.")
+    elif length == "long":
+        parts.append("You can give fuller replies: up to 4-5 sentences when it fits.")
+    else:
+        parts.append("Keep replies natural length: 1-3 sentences.")
+    if char.get("character_memory"):
+        parts.append(f"Things you remember about people:\n{char['character_memory']}")
     if char.get("scenario"):
         parts.append(f"Scenario: {char['scenario']}")
     if char.get("example_dialogue"):
@@ -181,6 +195,12 @@ def build_system_prompt(char):
         "- Never claim to be a real person."
     )
     return "\n".join(parts)
+
+
+def get_max_tokens(char):
+    """Map the reply_length setting to a token budget."""
+    length = ((char or {}).get("reply_length") or "medium").lower()
+    return {"short": 120, "long": 500}.get(length, 300)
 
 
 def apply_banned_phrases(text, char):
