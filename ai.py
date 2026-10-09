@@ -39,11 +39,13 @@ async def ai_chat(system, user_text, max_tokens=300, temperature=0.7,
                 "temperature": temperature,
                 "frequency_penalty": frequency_penalty,
             }
-            # gpt-oss are reasoning models: hide chain-of-thought so it
-            # doesn't leak into the reply as random irrelevant text.
+            # gpt-oss are reasoning models: keep reasoning out of the reply.
+            # GPT-OSS uses include_reasoning (not reasoning_format).
             if "gpt-oss" in model:
-                payload["reasoning_format"] = "hidden"
                 payload["reasoning_effort"] = "low"
+                payload["include_reasoning"] = False
+            elif "qwen" in model:
+                payload["reasoning_format"] = "hidden"
             # Attach recent conversation history for context.
             messages = [{"role": "system", "content": system}]
             if history:
