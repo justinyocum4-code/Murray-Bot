@@ -253,14 +253,52 @@ class MurrayBot(commands.Bot):
         display = (char or {}).get("name") or name
         return await ai_chat(system, f"{display} talking to {name}: {text}")
 
+    async def _handle_voice_note(self, message, attachment):
+        """Download a voice note, transcribe with Whisper, reply as Murray."""
+        try:
+            async with message.channel.typing():
+                data = await attachment.read()
+                if not data or len(data) > 25 * 1024 * 1024:
+                    return
+                text = await listen_mod.transcribe(
+                    data, filename=attachment.filename or "note.ogg")
+                if not text:
+                    await message.reply(
+                        "Couldn't make out that voice note, kid. Try again.",
+                        mention_author=False)
+                    return
+                reply = await self._respond(
+                    message.author.display_name,
+                    f"[voice note transcript: {text}]")
+                if reply:
+                    await message.reply(
+                        f'_heard: "{text[:200]}"_\n{reply[:1400]}',
+                        mention_author=False)
+                    await _speak_in_voice(message.guild, reply)
+        except Exception as e:  # noqa: BLE001
+            print(f"voice note failed: {e}", flush=True)
+
     async def on_message(self, message):
         if message.guild is None or message.author.bot:
             return
         content = (message.content or "").strip()
-        if not content or content.startswith(("/", "!")):
-            return
         mentioned = self.user in message.mentions
         addressed = content.lower().startswith("murray")
+        # Voice notes: audio attachments get transcribed and answered.
+        audio = None
+        for att in message.attachments:
+            ct = (att.content_type or "").lower()
+            name = (att.filename or "").lower()
+            if (ct.startswith("audio/") or
+                    name.endswith((".ogg", ".mp3", ".m4a", ".wav",
+                                   ".oga", ".webm", ".flac"))):
+                audio = att
+                break
+        if audio is not None and (mentioned or addressed or not content):
+            await self._handle_voice_note(message, audio)
+            return
+        if not content or content.startswith(("/", "!")):
+            return
         if not (mentioned or addressed):
             return
         now = time.time()

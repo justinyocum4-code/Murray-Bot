@@ -56,16 +56,15 @@ def _pcm_to_wav(pcm_bytes, sample_rate=48000, channels=2):
     return buf.getvalue()
 
 
-async def transcribe(wav_bytes):
-    """Send WAV audio to Groq Whisper. Returns text or None."""
+async def transcribe(audio_bytes, filename="speech.wav"):
+    """Send audio to Groq Whisper. Returns text or None."""
     key = os.environ.get("GROQ_API_KEY", "")
-    if not key or not wav_bytes:
+    if not key or not audio_bytes:
         return None
     try:
         form = aiohttp.FormData()
         form.add_field("model", "whisper-large-v3")
-        form.add_field("file", wav_bytes, filename="speech.wav",
-                       content_type="audio/wav")
+        form.add_field("file", audio_bytes, filename=filename)
         form.add_field("response_format", "json")
         async with aiohttp.ClientSession() as s:
             async with s.post(
